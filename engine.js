@@ -206,14 +206,40 @@ export function report(ctx, today) {
 
 /* ---------- plan ---------- */
 /** À incrémenter quand la façon de construire les séances change : les anciens plans sont alors reconstruits. */
-export const PLAN_VERSION = 2;
+export const PLAN_VERSION = 3;
 const LONG_CAP = [[12, 16], [25, 22], [50, 32]];
 const PEAK_CAP = [[7, 45], [12, 55], [25, 70], [50, 90]];
-const LAYOUT = { 3: '1Q 3E 6L', 4: '1Q 3E 5E 6L', 5: '1Q 2E 3S 5E 6L', 6: '0E 1Q 2E 3S 5E 6L' };
+/** Jours de course par défaut (0 = lundi … 6 = dimanche) selon le nombre de séances par semaine. */
+export const DEFAULT_WEEKDAYS = { 3: [1, 3, 6], 4: [1, 3, 5, 6], 5: [1, 2, 3, 5, 6], 6: [0, 1, 2, 3, 5, 6] };
 const cap = (table, x) => { for (const [lim, v] of table) if (x <= lim) return v; return table[table.length - 1][1]; };
 
-export function setGoal(name, distanceKm, raceDate, targetTime, days, today) {
-  return { name, distance_km: distanceKm, date: raceDate, target_s: parseGoalTime(targetTime, distanceKm), days, plan_start: mondayOf(today) };
+/** `opts.weekdays` : jours de course choisis (0 = lundi) ; `opts.long_day` : jour de la sortie longue. */
+export function setGoal(name, distanceKm, raceDate, targetTime, days, today, opts = {}) {
+  const weekdays = opts.weekdays?.length ? [...new Set(opts.weekdays.map(Number))].sort((a, b) => a - b) : DEFAULT_WEEKDAYS[Math.min(Math.max(days, 3), 6)];
+  if (weekdays.length < 3 || weekdays.length > 6) throw new Error('Choisissez entre 3 et 6 jours de course par semaine.');
+  const long_day = weekdays.includes(Number(opts.long_day)) ? Number(opts.long_day) : weekdays.includes(6) ? 6 : weekdays[weekdays.length - 1];
+  return { name, distance_km: distanceKm, date: raceDate, target_s: parseGoalTime(targetTime, distanceKm), days: weekdays.length, weekdays, long_day, plan_start: mondayOf(today) };
+}
+
+/** Répartit les rôles sur les jours choisis : L = sortie longue, Q/S = séances de qualité, E = facile.
+ *  Les séances dures sont éloignées de la sortie longue et ne sont jamais collées l'une à l'autre. */
+export function layoutFor(g) {
+  const wd = g.weekdays?.length ? g.weekdays : DEFAULT_WEEKDAYS[Math.min(Math.max(g.days, 3), 6)];
+  const long = wd.includes(g.long_day) ? g.long_day : wd.includes(6) ? 6 : wd[wd.length - 1];
+  const roles = { [long]: 'L' }, placed = [], circ = (a, b) => Math.min(Math.abs(a - b), 7 - Math.abs(a - b));
+  for (let q = 0; q < (wd.length >= 5 ? 2 : 1); q++) {
+    let best = null;
+    for (const d of wd) {
+      if (roles[d]) continue;
+      const before = (long - d + 7) % 7, after = (d - long + 7) % 7;
+      // éviter surtout la veille de la sortie longue, puis le lendemain ; éviter deux séances dures collées
+      const score = (before >= 2 ? 20 : 0) + (after >= 2 ? 10 : 0) + Math.min(before, after) * 3
+        + (placed.length ? (Math.min(...placed.map(p => circ(d, p))) >= 2 ? 8 : -25) : 0) - before * 0.1;
+      if (!best || score > best.score) best = { d, score };
+    }
+    roles[best.d] = q === 0 ? 'Q' : 'S'; placed.push(best.d);
+  }
+  return wd.map(d => [d, roles[d] || 'E']);
 }
 
 export function races(ctx) {
@@ -227,12 +253,32 @@ export function races(ctx) {
   return out;
 }
 
+/** Estime le niveau à partir de l'allure et de la FC des sorties récentes (méthode de la réserve de FC) :
+ *  %réserve de FC ≈ %réserve de VO2, donc VO2max ≈ (VO2 à l'allure − 3,5) / %réserve + 3,5. */
+function vdotFromRuns(ctx, today) {
+  const { fcMax, fcRepos } = ctx.cfg, res = fcMax - fcRepos;
+  if (!(res > 30)) return null;
+  const est = [];
+  for (const a of loadRows(ctx, addDays(today, -56))) {
+    if (!RUN.has(a.sport) || !a.avg_hr || !a.moving_s || (a.distance_m || 0) < 3000 || a.moving_s < 900) continue;
+    const hrr = (a.avg_hr - fcRepos) / res;
+    if (hrr < 0.5 || hrr > 0.92) continue;
+    est.push((vo2(a.distance_m / (a.moving_s / 60)) - 3.5) / hrr + 3.5);
+  }
+  if (est.length < 3) return null;
+  est.sort((x, y) => x - y);
+  const v = est[Math.floor((est.length - 1) * 0.75)]; // 3e quartile : les sorties faciles sous-estiment la forme
+  return v >= 25 && v <= 75 ? r1(v) : null;
+}
+
 function currentVdot(ctx, today, goalVdot) {
   const rs = races(ctx).filter(r => diffDays(today, r.date) <= 70);
   if (rs.length) {
     const best = rs.reduce((m, r) => (r.vdot > m.vdot ? r : m));
     return [best.vdot, `course « ${best.name} » du ${best.date}`, 'bonne'];
   }
+  const hr = vdotFromRuns(ctx, today);
+  if (hr) return [hr, 'estimé depuis vos sorties récentes (allure et FC)', 'moyenne'];
   const c = loadRows(ctx, addDays(today, -56))
     .filter(a => RUN.has(a.sport) && (a.distance_m || 0) >= 5000 && a.moving_s).map(a => vdot(a.distance_m, a.moving_s));
   if (c.length) return [r1(Math.max(...c)), 'meilleure sortie récente (pas de course)', 'faible : sous-estime en général'];
@@ -250,28 +296,29 @@ function phaseOf(n, total, dist) {
   return n < taper + 2 + build ? 'construction' : 'base';
 }
 
-const sess = (kind, d, km, extra = {}) => ({ date: d, kind, km: r1(km), ...extra });
+const sess = (kind, d, km, extra = {}) => ({ key: `${kind}@${d}`, date: d, kind, km: r1(km), ...extra });
 
 function weekSessions(monday, phase, km, g, raceInWeek, paces) {
-  const dist = g.distance_km, days = g.days, rd = g.date;
+  const dist = g.distance_km, rd = g.date;
   if (raceInWeek) {
     const s = [];
+    const mine = new Set(layoutFor(g).map(x => x[0]));
     for (const [off, kind, k] of [[-2, 'strides', 6], [-4, 'race_pace', 7], [-1, 'easy', 4]]) {
       const d = addDays(rd, off);
-      if (d >= monday && d < rd) s.push(sess(kind, d, k, { km_rp: 2.0 }));
+      if (d >= monday && d < rd && mine.has(weekday(d))) s.push(sess(kind, d, k, { km_rp: 2.0 }));
     }
     s.push(sess('race', rd, dist));
     return s.sort((a, b) => (a.date < b.date ? -1 : 1));
   }
-  const slots = LAYOUT[Math.min(Math.max(days, 3), 6)].split(' '), qKm = km * 0.2;
+  const slots = layoutFor(g), qKm = km * 0.2;
   const fixed = slots.map(x => {
-    const d = addDays(monday, Number(x[0])), k = x[1];
+    const d = addDays(monday, x[0]), k = x[1];
     return k === 'Q' ? quality(d, qKm, phase, km, g, paces) : k === 'S' ? second(d, qKm, phase, km) : null;
   });
   const qTotal = sum(fixed.filter(Boolean), f => f.km), nEasy = slots.filter(x => x[1] === 'E').length;
   const longKm = Math.min(Math.max((km - qTotal) / (1 + 0.7 * nEasy), 5), cap(LONG_CAP, dist)); // la sortie longue reste la plus longue
   const easyKm = Math.max(Math.min((km - qTotal - longKm) / Math.max(nEasy, 1), longKm * 0.9), 4);
-  return slots.map((x, i) => fixed[i] || sess(x[1] === 'L' ? 'long' : 'easy', addDays(monday, Number(x[0])), x[1] === 'L' ? longKm : easyKm));
+  return slots.map((x, i) => fixed[i] || sess(x[1] === 'L' ? 'long' : 'easy', addDays(monday, x[0]), x[1] === 'L' ? longKm : easyKm));
 }
 
 // La séance est toujours assez longue pour son contenu (échauffement + retour au calme = 3 km).
@@ -334,13 +381,19 @@ export function updatePlan(ctx, today, forceNew = false) {
   const outdated = !forceNew && ctx.meta.plan && ctx.meta.plan.v !== PLAN_VERSION;
   const old = forceNew || outdated ? null : ctx.meta.plan;
   const notes = [], rep = report(ctx, today);
+  const pause = ctx.meta.pause || null, pauseActive = !!pause && !pause.to, resuming = !!pause && !!pause.to;
   let weeks;
 
-  if (old) {
+  if (resuming) { // reprise après une pause : volume réduit selon la durée d'arrêt, sans rattrapage
+    const days = Math.max(diffDays(pause.to, pause.from), 0), factor = days < 7 ? 0.85 : days < 21 ? 0.7 : 0.55;
+    const base = Math.max((pause.chain || 12) * factor, 12), frozen = (ctx.meta.plan?.weeks || []).filter(w => w.monday < cur);
+    weeks = [...frozen, ...buildWeeks(g, cur, base, frozen.length, raceMonday, total, paces)];
+    notes.push(`Reprise après ${days} jour(s) de pause : volume repris à ${rnd(base)} km/semaine, progression prudente.`);
+  } else if (old) {
     // Semaine en cours : figée si elle a déjà commencé (ou si c'est la 1re du plan), sinon recalculée.
     const started = loadRows(ctx, cur).length > 0, keep = started || !old.weeks.some(w => w.monday < cur);
     const frozen = old.weeks.filter(w => (keep ? w.monday <= cur : w.monday < cur)), first = keep ? addDays(cur, 7) : cur;
-    const prev = old.weeks.find(w => w.monday === addDays(cur, -7));
+    const prev = pauseActive ? null : old.weeks.find(w => w.monday === addDays(cur, -7));
     const chain = frozen.length ? frozen[frozen.length - 1].chain_km : old.weeks[0].chain_km;
     let base = chain;
     if (prev) {
@@ -365,7 +418,7 @@ export function updatePlan(ctx, today, forceNew = false) {
   }
 
   const f = rep.forme;
-  if (rep.acwr && (rep.acwr > 1.5 || f.tsb < -25)) {
+  if (!pauseActive && !resuming && rep.acwr && (rep.acwr > 1.5 || f.tsb < -25)) {
     const nxt = weeks.find(w => w.monday > cur && w.phase !== 'affûtage');
     if (nxt) {
       nxt.sessions = weekSessions(nxt.monday, nxt.phase, r1(nxt.km * 0.7), g, false, paces);
@@ -378,14 +431,74 @@ export function updatePlan(ctx, today, forceNew = false) {
   if (weeksLeft <= (g.distance_km <= 25 ? 2 : 3)) {
     notes.push(`La course est très proche (${weeksLeft} semaine(s) avant la semaine de course) : le plan se limite à l'affûtage. Sorties faciles, repos, et pas de séance dure.`);
   }
-  if (conf !== 'bonne') {
-    notes.push('Niveau estimé avec prudence (pas de course récente) : allures et temps prédit peu fiables. Marquez une course récente avec 🏁 pour les affiner.');
+  if (conf === 'moyenne') {
+    notes.push('Niveau estimé à partir de vos sorties (allure et FC) : correct si votre FC max et votre FC repos sont justes. Ajoutez une course ou un test récent pour affiner.');
+  } else if (conf !== 'bonne') {
+    notes.push('Niveau estimé avec prudence (pas de course récente) : allures et temps prédit peu fiables. Ajoutez une course ou un test récent pour les affiner.');
   } else if (gap > 0.15 * weeksLeft + 0.5) {
     notes.push(`⚠ Objectif ambitieux : il faudrait gagner ${fl(rnd(gap, 1))} points de VDOT en ${weeksLeft} semaines (~${fl(rnd(0.15 * weeksLeft, 1))} réaliste). Temps prédit aujourd'hui : ${fmtTime(pred)}.`);
   } else if (gap < -1.5) {
     notes.push(`Votre niveau actuel permet déjà ~${fmtTime(pred)} : vous pouvez viser plus ambitieux que ${fmtTime(g.target_s)}.`);
   }
+  if (pauseActive) { // aucune séance pendant la pause
+    for (const w of weeks) if (addDays(w.monday, 6) >= pause.from) {
+      w.sessions = w.sessions.filter(x => x.date < pause.from); w.km = sumKm(w.sessions); w.paused = w.sessions.length === 0;
+    }
+    notes.unshift(`⏸ Pause depuis le ${pause.from} : aucune séance prévue. Reprenez quand vous êtes prêt : le plan repartira à un volume réduit.`);
+  }
+  applyMoves(weeks, ctx.meta.moves);
   return { v: PLAN_VERSION, generated: today, vdot: vd, vdot_source: src, confiance: conf, vdot_objectif: r1(gv), temps_predit_s: rnd(pred), weeks, notes };
+}
+
+/** Applique les séances déplacées par l'utilisateur ({ key, to }) : la clé est stable d'une reconstruction à l'autre. */
+export function applyMoves(weeks, moves) {
+  for (const m of moves || []) for (const w of weeks) {
+    const s = w.sessions.find(x => x.key === m.key);
+    if (s) { s.date = m.to; w.sessions.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)); }
+  }
+}
+
+/** Nouvelle liste de déplacements après avoir mis la séance `key` au jour `to` (échange si le jour est pris). */
+export function planMove(ctx, key, to, today) {
+  const w = ctx.meta.plan?.weeks.find(x => x.sessions.some(s => s.key === key));
+  if (!w) throw new Error('Séance introuvable.');
+  const s = w.sessions.find(x => x.key === key);
+  if (s.kind === 'race') throw new Error('Le jour de la course ne se déplace pas.');
+  if (s.date < today) throw new Error('Cette séance est déjà passée.');
+  if (to < today || to < w.monday || to > addDays(w.monday, 6)) throw new Error("Choisissez un jour de la même semaine, à partir d'aujourd'hui.");
+  const other = w.sessions.find(x => x.date === to && x.key !== key);
+  if (other?.kind === 'race') throw new Error('Ce jour est celui de la course.');
+  const keep = (ctx.meta.moves || []).filter(m => m.key !== key && m.key !== other?.key && m.key.split('@')[1] >= addDays(today, -56));
+  if (to !== s.date) { keep.push({ key, to }); if (other) keep.push({ key: other.key, to: s.date }); }
+  return keep;
+}
+
+/** Début d'une pause (blessure, maladie) : mémorise le volume de référence pour la reprise. */
+export function startPause(ctx, today) {
+  const w = ctx.meta.plan?.weeks.find(x => x.monday === mondayOf(today));
+  return { from: today, to: null, chain: w ? w.chain_km : (ctx.meta.plan?.weeks[0]?.chain_km ?? 12) };
+}
+
+/** Séance par séance : faite (le jour prévu ou un autre jour de la semaine), en attente, manquée. */
+function sessionStatuses(ctx, w, today) {
+  const end = addDays(w.monday, 6), out = {};
+  const acts = loadRows(ctx, w.monday).filter(a => dayOf(a) <= end && dayOf(a) <= today && RUN.has(a.sport)), used = new Set();
+  const ok = (s, a) => (a.distance_m || 0) / 1000 >= (s.kind === 'race' ? 0.8 : 0.6) * s.km;
+  const key = s => s.key || `${s.kind}@${s.date}`, due = w.sessions.filter(s => s.date <= today);
+  for (const s of due) { // d'abord le jour prévu
+    const a = acts.find(x => !used.has(x.id) && dayOf(x) === s.date && ok(s, x));
+    if (a) { used.add(a.id); out[key(s)] = { status: 'done' }; }
+  }
+  for (const s of due) { // puis un autre jour de la même semaine (séance décalée)
+    if (out[key(s)] || s.kind === 'race' || s.date >= today) continue;
+    let best = null;
+    for (const a of acts) if (!used.has(a.id) && ok(s, a)) { const dd = Math.abs(diffDays(dayOf(a), s.date)); if (!best || dd < best.dd) best = { a, dd }; }
+    if (best) { used.add(best.a.id); out[key(s)] = { status: 'done', done_on: dayOf(best.a) }; }
+  }
+  for (const s of w.sessions) if (!out[key(s)]) {
+    out[key(s)] = { status: s.kind === 'race' ? (s.date < today ? 'missed' : 'race') : s.date < today ? (today > end ? 'missed' : 'pending') : 'upcoming' };
+  }
+  return out;
 }
 
 export function describe(s, paces, g) {
@@ -407,17 +520,15 @@ export function planData(ctx, today) {
   const { goal: g, plan } = ctx.meta;
   if (!g || !plan) return { goal: g || null, plan: null };
   const paces = trainingPaces(plan.vdot), curMonday = mondayOf(today);
+  const statuses = Object.fromEntries(plan.weeks.map(w => [w.monday, sessionStatuses(ctx, w, today)]));
   const weeks = plan.weeks.map(w => ({
     monday: w.monday, phase: w.phase, km: w.km, recovery: w.recovery,
     actual: w.monday <= today ? r1(runKm(ctx, w.monday, addDays(w.monday, 7))) : null,
     current: w.monday === curMonday,
+    paused: !!w.paused,
     sessions: w.sessions.map(s => {
-      let status = s.kind === 'race' ? 'race' : 'upcoming';
-      if (s.date < today) {
-        const ok = loadRows(ctx, s.date).some(a => RUN.has(a.sport) && dayOf(a) === s.date && (a.distance_m || 0) / 1000 >= 0.6 * s.km);
-        status = ok ? 'done' : 'missed';
-      }
-      return { date: s.date, kind: s.kind, km: s.km, text: describe(s, paces, g), status };
+      const k = s.key || `${s.kind}@${s.date}`, st = statuses[w.monday][k];
+      return { key: k, date: s.date, kind: s.kind, km: s.km, text: describe(s, paces, g), status: st.status, done_on: st.done_on || null, moved: k.split('@')[1] !== s.date };
     }),
   }));
   return {
@@ -425,7 +536,7 @@ export function planData(ctx, today) {
     plan: {
       vdot: plan.vdot, vdot_source: plan.vdot_source, confiance: plan.confiance, vdot_objectif: plan.vdot_objectif,
       predicted: fmtTime(plan.temps_predit_s), paces: Object.fromEntries(Object.entries(paces).map(([k, v]) => [k, fmtPace(v)])),
-      notes: plan.notes, weeks,
+      notes: plan.notes, weeks, pause: ctx.meta.pause || null,
     },
   };
 }
@@ -435,7 +546,7 @@ export function summaryForCoach(ctx, today) {
   if (!g || !plan) return null;
   const paces = trainingPaces(plan.vdot), cur = mondayOf(today);
   return {
-    objectif: g, vdot: plan.vdot, vdot_objectif: plan.vdot_objectif, temps_predit: fmtTime(plan.temps_predit_s),
+    objectif: g, en_pause: !!(ctx.meta.pause && !ctx.meta.pause.to), vdot: plan.vdot, vdot_objectif: plan.vdot_objectif, temps_predit: fmtTime(plan.temps_predit_s),
     notes: plan.notes, courses_recentes: races(ctx).slice(-3),
     semaines_a_venir: plan.weeks.filter(w => w.monday >= cur).slice(0, 2).map(w => ({
       semaine: w.monday, phase: w.phase, km: w.km, seances: w.sessions.map(s => `${describe(s, paces, g)} (${s.date})`),

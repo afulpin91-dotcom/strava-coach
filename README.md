@@ -43,11 +43,24 @@ Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 2. Settings › Variables : `CLIENT_ID`, `CLIENT_SECRET` (type *Secret*), `ALLOWED_ORIGIN` = `https://VOTRE-NOM.github.io`.
 3. Réglages › « Adresse du relais » : l'adresse `https://….workers.dev`.
 
+## Utiliser le plan
+
+- **Vos jours :** à la création de l'objectif, cochez les jours où vous pouvez courir (3 à 6) et le jour de la sortie longue.
+  Les séances dures sont placées loin de la sortie longue et jamais collées l'une à l'autre.
+- **Déplacer une séance :** touchez ⇄ à côté de la séance et choisissez un autre jour de la même semaine
+  (échange si le jour est pris). Le déplacement est conservé quand le plan se recalcule.
+- **Suivi :** une séance faite un autre jour de la semaine compte (✓ « faite le … ») ; ⏳ = pas encore faite cette
+  semaine ; ✗ n'apparaît qu'une fois la semaine terminée.
+- **Pause (blessure, maladie) :** « Mettre en pause » retire les séances à venir ; à la reprise, le volume repart plus bas
+  selon la durée de l'arrêt (−15 %, −30 % ou −45 %), sans rattrapage.
+- **Niveau :** sans course, l'app l'estime depuis l'allure et la FC de vos sorties (il faut donc une FC max et une FC repos
+  justes dans Réglages). « Affiner mon niveau » permet d'ajouter une course ou un test en quelques secondes.
+
 ## À savoir
 
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v5'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v6'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

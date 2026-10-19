@@ -9,7 +9,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v5';
+const APP_VERSION = 'v6';
+const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 let D = null, ctx = null, tokens = null, view = 'home', busy = false, codeScreen = null;
 
 function judgeTSB(v){ return v < -25 ? ['Surcharge','bad'] : v < -10 ? ['Charge forte','warn'] : v <= 5 ? ['Zone productive','good'] : v <= 15 ? ['Frais','good'] : ['Désentraînement','warn']; }
@@ -83,19 +84,43 @@ function kpis() {
     <div class="card kpi" style="margin:0"><div class="l">Fatigue (ATL)</div><div class="v">${f.atl}</div><div class="s muted">7 derniers jours</div></div>
     <div class="card kpi" style="margin:0"><div class="l">Fraîcheur (TSB)</div><div class="v">${f.tsb}</div><div class="s ${tc}">${tl}</div></div>
     <div class="card kpi" style="margin:0"><div class="l">Charge 7j / 28j</div><div class="v">${r.acwr ?? '—'}</div><div class="s ${ac}">${al}</div></div>
-    ${D.plan ? `<div class="card kpi" style="margin:0"><div class="l">${esc(D.goal.distance_km)} km aujourd'hui</div><div class="v">${esc(D.plan.predicted)}</div><div class="s muted">objectif ${esc(D.goal.target)}${D.plan.confiance !== 'bonne' ? ' · estimation peu fiable' : ''}</div></div>` : ''}
+    ${D.plan ? `<div class="card kpi" style="margin:0"><div class="l">${esc(D.goal.distance_km)} km aujourd'hui</div><div class="v">${esc(D.plan.predicted)}</div><div class="s muted">objectif ${esc(D.goal.target)}${D.plan.confiance === 'bonne' ? '' : D.plan.confiance === 'moyenne' ? ' · estimation' : ' · estimation peu fiable'}</div></div>` : ''}
   </div>`;
 }
 function goalForm(existing) {
   const g = existing || {};
+  const wd = g.weekdays?.length ? g.weekdays : E.DEFAULT_WEEKDAYS[Math.min(Math.max(g.days || 4, 3), 6)];
+  const ld = g.long_day ?? (wd.includes(6) ? 6 : wd[wd.length - 1]);
   return `<form id="goalForm">
     <div><label>Nom de la course</label><input name="name" required value="${esc(g.name || '')}" placeholder="Semi de Lyon"></div>
     <div><label>Distance (km)</label><input name="distance" type="number" step="0.1" min="1" required value="${esc(g.distance_km || 21.1)}"></div>
     <div><label>Date</label><input name="date" type="date" required value="${esc(g.date || '')}"></div>
     <div><label>Temps visé (h:mm:ss)</label><input name="time" required pattern="\\d{1,2}(:\\d{2}){1,2}" value="${esc(g.target_s ? hms(g.target_s) : '')}" placeholder="1:45:00"></div>
-    <div><label>Jours de course / semaine</label><select name="days">${[3,4,5,6].map(n => `<option ${n == (g.days || 4) ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
+    <div style="grid-column:1/-1"><label>Jours où vous pouvez courir (3 à 6)</label>
+      <div class="chips">${WD_NAMES.map((n, i) => `<label class="chip"><input type="checkbox" name="wd" value="${i}" ${wd.includes(i) ? 'checked' : ''}><span>${n}</span></label>`).join('')}</div></div>
+    <div><label>Jour de la sortie longue</label><select name="long_day">${WD_NAMES.map((n, i) => `<option value="${i}" ${i === ld ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
     <div><button class="primary" type="submit">${existing ? 'Mettre à jour l\'objectif' : 'Créer mon plan'}</button></div>
   </form><div id="goalErr" class="err"></div>`;
+}
+function pauseBlock(p) {
+  if (p.pause && !p.pause.to) {
+    return `<div class="card banner" style="margin:10px 0"><b>⏸ En pause depuis le ${fmtDate(p.pause.from)}</b>
+      <p class="muted" style="margin:6px 0">Aucune séance n'est prévue. À la reprise, le volume repart plus bas selon la durée de l'arrêt, sans rattrapage.</p>
+      <button class="primary" id="resumeBtn">Reprendre l'entraînement</button></div>`;
+  }
+  return `<details style="border:0;padding:4px 0"><summary class="muted">⏸ Blessure ou maladie : mettre en pause</summary>
+    <p class="muted">Les séances à venir sont retirées. À la reprise, le volume repart plus bas (selon la durée de l'arrêt), sans rattrapage. En cas de douleur persistante, consultez un professionnel de santé.</p>
+    <button id="pauseBtn">Mettre en pause à partir d'aujourd'hui</button></details>`;
+}
+function levelCard(p) {
+  return `<details class="card"><summary><b>🏁 Affiner mon niveau</b> <span class="tag">confiance : ${esc(String(p.confiance).split(' ')[0])}</span></summary>
+    <p class="muted">Pour des allures fiables, ajoutez une course ou un test à fond (5 km, 10 km…) fait ces 10 dernières semaines. Vous pouvez aussi marquer une activité avec 🏁 dans « Dernières activités ». Si la course est déjà dans vos activités, marquez-la plutôt que de la ressaisir.</p>
+    <form id="quickRace">
+      <div><label>Date</label><input name="date" type="date" required value="${today()}" max="${today()}"></div>
+      <div><label>Distance</label><select name="km"><option value="5">5 km</option><option value="10">10 km</option><option value="15">15 km</option><option value="21.1" selected>Semi (21,1 km)</option><option value="42.2">Marathon</option></select></div>
+      <div><label>Temps (h:mm:ss)</label><input name="time" required placeholder="45:00" pattern="\\d{1,2}(:\\d{2}){1,2}"></div>
+      <div><button class="primary" type="submit">Ajouter ma course</button></div>
+    </form><div id="quickErr" class="err"></div></details>`;
 }
 function planSection() {
   if (!D.goal || !D.plan) {
@@ -104,17 +129,22 @@ function planSection() {
   const p = D.plan, g = D.goal;
   const weeks = p.weeks, ci = Math.max(weeks.findIndex(w => w.current), 0);
   const shown = weeks.slice(ci);
-  const icon = {done:'<span class="good" title="Fait">✓</span>', missed:'<span class="bad" title="Manqué">✗</span>', race:'🏁', upcoming:''};
+  const icon = s => ({ done: `<span class="good" title="${s.done_on ? 'Fait le ' + fmtDate(s.done_on) : 'Fait'}">✓</span>`,
+    missed: '<span class="bad" title="Manqué">✗</span>', pending: '<span class="warn" title="Pas encore fait cette semaine">⏳</span>', race: '🏁',
+    upcoming: s.kind === 'race' ? '🏁' : `<button class="mini" data-move="${esc(s.key)}" aria-label="Déplacer" title="Déplacer cette séance">⇄</button>` })[s.status];
+  const note = s => s.done_on ? ` <span class="muted">(faite le ${fmtDate(s.done_on)})</span>` : s.moved ? ' <span class="muted">(déplacée)</span>' : '';
   const wk = (w, open) => `<details ${open ? 'open' : ''}><summary>
       <span><b>${fmtDate(w.monday)}</b> <span class="tag ${w.current ? 'cur' : ''}">${PHASE[w.phase] || w.phase}${w.recovery ? ' · récup' : ''}</span></span>
       <span class="muted">prévu ${Math.round(w.km)} km${w.actual != null ? ` · fait ${Math.round(w.actual)} km` : ''}</span></summary>
-      ${w.sessions.map(s => `<div class="sess"><span class="d">${fmtDate(s.date)}</span><span>${esc(s.text)}</span><span>${icon[s.status]}</span></div>`).join('')}
+      ${w.paused ? '<p class="muted">⏸ Pause : aucune séance prévue.</p>' : ''}
+      ${w.sessions.map(s => `<div class="sess" data-week="${w.monday}"><span class="d">${fmtDate(s.date)}</span><span>${esc(s.text)}${note(s)}</span><span class="st">${icon(s)}</span></div>`).join('')}
     </details>`;
   return `<div class="card">
     <h2>🎯 ${esc(g.name)} — ${esc(g.distance_km)} km le ${new Date(g.date + 'T12:00').toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'})} en ${esc(g.target)} (${esc(g.goal_pace)})</h2>
     <p class="muted" style="margin-top:-6px">Niveau VDOT ${p.vdot} (${esc(p.vdot_source)} — confiance ${esc(p.confiance)}) · objectif VDOT ${p.vdot_objectif}<br>
     Allures : ${Object.entries(p.paces).map(([k, v]) => `<b>${k}</b> ${v}`).join(' · ')}</p>
     ${p.notes.length ? `<ul class="notes">${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    ${pauseBlock(p)}
     ${shown.slice(0, 3).map((w, i) => wk(w, i < 2)).join('')}
     <details><summary class="muted">Voir toutes les semaines (${shown.length - 3 > 0 ? shown.length - 3 : 0} de plus)</summary>
       ${shown.slice(3).map(w => wk(w, false)).join('')}</details>
@@ -124,6 +154,7 @@ function planSection() {
       <form id="raceForm" style="grid-template-columns:1fr auto"><input name="id" type="number" placeholder="ID activité" required><button>Marquer comme course</button></form>
     </div></details>
   </div>
+  ${p.confiance !== 'bonne' ? levelCard(p) : ''}
   <div class="card"><h2>Volume hebdomadaire : prévu vs réalisé (km)</h2>
     ${barChart(weeks.map(w => ({label: w.monday.slice(5), plan: w.km, actual: w.actual})))}
     ${legend([['var(--line)', 'Prévu'], ['var(--accent)', 'Réalisé']])}</div>`;
@@ -186,12 +217,32 @@ async function refresh() {
 }
 
 async function saveGoal(f) {
-  const b = Object.fromEntries(new FormData(f));
-  if (!/^\d{1,2}(:\d{2}){1,2}$/.test(b.time)) throw new Error('Temps visé invalide (ex. 1:45:00).');
-  const g = E.setGoal(b.name, Number(b.distance), b.date, b.time, Number(b.days), today());
-  ctx.meta.goal = g; ctx.meta.plan = null;
-  await db.setMeta('goal', g);
+  const fd = new FormData(f), b = Object.fromEntries(fd), wd = fd.getAll('wd').map(Number);
+  if (wd.length < 3 || wd.length > 6) throw new Error('Choisissez entre 3 et 6 jours de course par semaine.');
+  if (!wd.includes(Number(b.long_day))) throw new Error('Le jour de la sortie longue doit faire partie des jours choisis.');
+  const g = E.setGoal(b.name, Number(b.distance), b.date, b.time, wd.length, today(), { weekdays: wd, long_day: Number(b.long_day) });
+  ctx.meta.goal = g; ctx.meta.plan = null; ctx.meta.moves = []; ctx.meta.pause = null;
+  await db.setMeta('goal', g); await db.setMeta('moves', []); await db.delMeta('pause');
   await db.setMeta('plan', E.updatePlan(ctx, today(), true));
+}
+
+/** Ajoute une activité saisie à la main et recalcule le plan. */
+async function addRun({ date, sport = 'Run', km, sec, hr = null, elev = null, race = false, name }) {
+  await db.put('activities', {
+    id: Date.now() + Math.floor(Math.random() * 1000), name, sport, start_date: `${date}T12:00:00Z`, distance_m: Math.round(km * 1000), moving_s: Math.round(sec),
+    elevation_m: elev, avg_hr: hr, avg_speed: km * 1000 / sec, perceived_exertion: null, workout_type: race ? 1 : null, source: 'manual',
+  });
+  ctx = await db.loadContext();
+  if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (err) { /* ignore */ } }
+}
+
+async function movePlanSession(key, to) {
+  try {
+    const moves = E.planMove(ctx, key, to, today());
+    await db.setMeta('moves', moves); ctx.meta.moves = moves;
+    E.applyMoves(ctx.meta.plan.weeks, moves); await db.setMeta('plan', ctx.meta.plan);
+  } catch (e) { setStatus(e.message, true); await refresh(); return; }
+  await refresh(); setStatus('Séance déplacée ✓');
 }
 
 async function doSync(withStreams) {
@@ -365,20 +416,47 @@ function bind() {
     if (ctx.meta.goal && ctx.meta.plan) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e) { /* ignore */ } }
     await refresh();
   });
+  document.querySelectorAll('[data-move]').forEach(btn => btn.onclick = () => {
+    const key = btn.dataset.move, row = btn.closest('.sess'), monday = row.dataset.week;
+    const w = D.plan.weeks.find(x => x.monday === monday), sess = w.sessions.find(x => x.key === key);
+    const sel = document.createElement('select');
+    sel.innerHTML = '<option value="">Déplacer au…</option>' + Array.from({ length: 7 }, (_, i) => E.addDays(monday, i))
+      .filter(d => d >= today() && d !== sess.date && d <= E.addDays(monday, 6))
+      .map(d => { const o = w.sessions.find(x => x.date === d); return `<option value="${d}" ${o?.kind === 'race' ? 'disabled' : ''}>${fmtDate(d)}${o ? ' (échange)' : ''}</option>`; }).join('');
+    sel.onchange = () => sel.value && movePlanSession(key, sel.value);
+    btn.replaceWith(sel); sel.focus();
+  });
+  const pb = $('#pauseBtn');
+  if (pb) pb.onclick = async () => {
+    ctx.meta.pause = E.startPause(ctx, today()); await db.setMeta('pause', ctx.meta.pause);
+    try { await db.setMeta('plan', E.updatePlan(ctx, today())); setStatus('Pause enregistrée. Prenez soin de vous.'); } catch (e) { setStatus(e.message, true); }
+    await refresh();
+  };
+  const rb = $('#resumeBtn');
+  if (rb) rb.onclick = async () => {
+    ctx.meta.pause = { ...ctx.meta.pause, to: today() };
+    try { await db.setMeta('plan', E.updatePlan(ctx, today())); await db.delMeta('pause'); ctx.meta.pause = null; setStatus('Reprise ✓ — le plan repart prudemment.'); }
+    catch (e) { setStatus(e.message, true); }
+    await refresh();
+  };
+  const qr = $('#quickRace');
+  if (qr) qr.onsubmit = async e => {
+    e.preventDefault();
+    const km = Number(qr.km.value);
+    try {
+      const sec = E.parseGoalTime(qr.time.value, km);
+      await addRun({ date: qr.date.value, km, sec, race: true, name: `Course ${km} km (saisie)` });
+      await refresh(); setStatus('Course ajoutée ✓ — niveau et allures recalculés.');
+    } catch (err) { $('#quickErr').textContent = err.message; }
+  };
   const mf = $('#manualForm');
   if (mf) mf.onsubmit = async e => {
     e.preventDefault();
     const b = Object.fromEntries(new FormData(mf)), km = Number(b.km), min = Number(b.min);
     if (!(km > 0) || !(min > 0)) { $('#manualErr').textContent = 'Distance et durée doivent être positives.'; return; }
-    await db.put('activities', {
-      id: Date.now(), name: ({ Run: 'Course à pied', TrailRun: 'Trail', Ride: 'Vélo', Walk: 'Marche', Hike: 'Randonnée', Workout: 'Séance' })[b.sport] + ' (saisie)',
-      sport: b.sport, start_date: `${b.date}T12:00:00Z`, distance_m: Math.round(km * 1000), moving_s: Math.round(min * 60),
-      elevation_m: b.elev ? Math.round(Number(b.elev)) : null, avg_hr: b.hr ? Number(b.hr) : null, avg_speed: km * 1000 / (min * 60),
-      perceived_exertion: null, workout_type: b.race ? 1 : null, source: 'manual',
-    });
-    ctx = await db.loadContext();
-    if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (err) { /* ignore */ } }
-    setStatus('Séance ajoutée ✓ — plan mis à jour.'); await refresh();
+    await addRun({ date: b.date, sport: b.sport, km, sec: min * 60, hr: b.hr ? Number(b.hr) : null, elev: b.elev ? Math.round(Number(b.elev)) : null, race: !!b.race,
+      name: ({ Run: 'Course à pied', TrailRun: 'Trail', Ride: 'Vélo', Walk: 'Marche', Hike: 'Randonnée', Workout: 'Séance' })[b.sport] + ' (saisie)' });
+    await refresh(); setStatus('Séance ajoutée ✓ — plan mis à jour.');
   };
   document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
     if (!confirm('Supprimer cette séance ?')) return;

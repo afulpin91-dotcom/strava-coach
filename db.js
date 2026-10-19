@@ -41,16 +41,16 @@ export const delMeta = key => tx('meta', 'readwrite', s => wrap(s.delete(key)));
 
 /** Charge tout ce dont le moteur a besoin. */
 export async function loadContext() {
-  const [acts, streamRows, settings, hr_zones, goal, plan, manual] = await Promise.all([
+  const [acts, streamRows, settings, hr_zones, goal, plan, manual, pause, moves] = await Promise.all([
     getAll('activities'), getAll('streams'), getMeta('settings'), getMeta('hr_zones'),
-    getMeta('goal'), getMeta('plan'), getMeta('manual_races'),
+    getMeta('goal'), getMeta('plan'), getMeta('manual_races'), getMeta('pause'), getMeta('moves'),
   ]);
   acts.sort((a, b) => (a.start_date < b.start_date ? -1 : 1));
   const streams = Object.fromEntries(streamRows.filter(r => r.heartrate).map(r => [r.id, r]));
   const s = settings || {};
   return {
     acts, streams, settings: s,
-    meta: { hr_zones, goal, plan, manual_races: manual || [] },
+    meta: { hr_zones, goal, plan, manual_races: manual || [], pause: pause || null, moves: moves || [] },
     cfg: { fcMax: Number(s.fcMax) || 190, fcRepos: Number(s.fcRepos) || 55, fcZones: parseZones(s.fcZones) },
   };
 }
@@ -67,7 +67,7 @@ export async function exportAll() {
     version: 1, exported: new Date().toISOString(), settings,
     activities: await getAll('activities'), streams: await getAll('streams'),
     goal: await getMeta('goal'), plan: await getMeta('plan'), manual_races: await getMeta('manual_races'),
-    hr_zones: await getMeta('hr_zones'),
+    hr_zones: await getMeta('hr_zones'), pause: await getMeta('pause'), moves: await getMeta('moves'),
   };
 }
 export async function importAll(d) {
@@ -75,7 +75,7 @@ export async function importAll(d) {
   const keep = (await getMeta('settings')) || {};
   await putMany('activities', d.activities || []);
   await putMany('streams', d.streams || []);
-  for (const k of ['goal', 'plan', 'manual_races', 'hr_zones']) if (d[k] != null) await setMeta(k, d[k]);
+  for (const k of ['goal', 'plan', 'manual_races', 'hr_zones', 'pause', 'moves']) if (d[k] != null) await setMeta(k, d[k]);
   await setMeta('settings', { ...(d.settings || {}), clientSecret: keep.clientSecret });
 }
 export async function wipe() {
