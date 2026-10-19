@@ -48,6 +48,6 @@ Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v4'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v5'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

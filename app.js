@@ -9,6 +9,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
+const APP_VERSION = 'v5';
 let D = null, ctx = null, tokens = null, view = 'home', busy = false, codeScreen = null;
 
 function judgeTSB(v){ return v < -25 ? ['Surcharge','bad'] : v < -10 ? ['Charge forte','warn'] : v <= 5 ? ['Zone productive','good'] : v <= 15 ? ['Frais','good'] : ['Désentraînement','warn']; }
@@ -251,7 +252,8 @@ function settingsView() {
     <p class="muted">Tout est stocké uniquement sur cet appareil. Faites une sauvegarde de temps en temps.</p>
     <div class="row"><button id="exportBtn">Exporter une sauvegarde</button>
       <label style="margin:0"><span class="muted">Restaurer une sauvegarde</span><input id="restoreFile" type="file" accept="application/json"></label></div>
-    <button id="wipeBtn" style="color:var(--bad)">Effacer toutes les données</button></div>`;
+    <button id="wipeBtn" style="color:var(--bad)">Effacer toutes les données</button></div>
+  <p class="muted" id="appVersion" style="text-align:center;font-size:12px"></p>`;
 }
 
 function codeView() {
@@ -297,6 +299,7 @@ function bind() {
   const cp = $('#copyBtn');
   if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText($('#coachTxt').value); } catch { $('#coachTxt').select(); document.execCommand('copy'); } cp.textContent = 'Copié ✓'; setTimeout(() => cp.textContent = 'Copier', 1500); };
 
+  const ver = $('#appVersion'); if (ver) ver.textContent = `App ${APP_VERSION} · plan v${E.PLAN_VERSION}`;
   const sf = $('#settingsForm');
   if (sf) sf.onsubmit = async e => {
     e.preventDefault();
@@ -402,7 +405,7 @@ async function boot() {
       catch (e) { setStatus(e.message, true); }
     } else codeScreen = q.get('code');
   }
-  if (ctx.meta.goal && ctx.meta.plan && ctx.meta.plan.generated !== today()) { // nouveau jour : le plan se recale sur le réalisé
+  if (ctx.meta.goal && ctx.meta.plan && (ctx.meta.plan.generated !== today() || ctx.meta.plan.v !== E.PLAN_VERSION)) { // nouveau jour : le plan se recale sur le réalisé
     try { await db.setMeta('plan', E.updatePlan(ctx, today())); ctx = await db.loadContext(); } catch (e) { setStatus(e.message, true); }
   }
   D = E.dashboard(ctx, today());

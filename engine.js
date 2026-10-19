@@ -205,6 +205,8 @@ export function report(ctx, today) {
 }
 
 /* ---------- plan ---------- */
+/** À incrémenter quand la façon de construire les séances change : les anciens plans sont alors reconstruits. */
+export const PLAN_VERSION = 2;
 const LONG_CAP = [[12, 16], [25, 22], [50, 32]];
 const PEAK_CAP = [[7, 45], [12, 55], [25, 70], [50, 90]];
 const LAYOUT = { 3: '1Q 3E 6L', 4: '1Q 3E 5E 6L', 5: '1Q 2E 3S 5E 6L', 6: '0E 1Q 2E 3S 5E 6L' };
@@ -329,7 +331,8 @@ export function updatePlan(ctx, today, forceNew = false) {
   const gv = vdot(g.distance_km * 1000, g.target_s);
   const [vd, src, conf] = currentVdot(ctx, today, gv);
   const paces = trainingPaces(vd);
-  const old = forceNew ? null : ctx.meta.plan;
+  const outdated = !forceNew && ctx.meta.plan && ctx.meta.plan.v !== PLAN_VERSION;
+  const old = forceNew || outdated ? null : ctx.meta.plan;
   const notes = [], rep = report(ctx, today);
   let weeks;
 
@@ -357,6 +360,7 @@ export function updatePlan(ctx, today, forceNew = false) {
   } else {
     const base = Math.max(runKm(ctx, addDays(cur, -28), cur) / 4, 12);
     weeks = buildWeeks(g, cur, base, 0, raceMonday, total, paces);
+    if (outdated) notes.push('Plan reconstruit : l\'app a été mise à jour (séances plus cohérentes).');
     notes.push(`Plan créé : base de départ ${rnd(base)} km/semaine (moyenne des 4 dernières semaines).`);
   }
 
@@ -381,7 +385,7 @@ export function updatePlan(ctx, today, forceNew = false) {
   } else if (gap < -1.5) {
     notes.push(`Votre niveau actuel permet déjà ~${fmtTime(pred)} : vous pouvez viser plus ambitieux que ${fmtTime(g.target_s)}.`);
   }
-  return { generated: today, vdot: vd, vdot_source: src, confiance: conf, vdot_objectif: r1(gv), temps_predit_s: rnd(pred), weeks, notes };
+  return { v: PLAN_VERSION, generated: today, vdot: vd, vdot_source: src, confiance: conf, vdot_objectif: r1(gv), temps_predit_s: rnd(pred), weeks, notes };
 }
 
 export function describe(s, paces, g) {
