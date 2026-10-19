@@ -82,7 +82,7 @@ function kpis() {
     <div class="card kpi" style="margin:0"><div class="l">Fatigue (ATL)</div><div class="v">${f.atl}</div><div class="s muted">7 derniers jours</div></div>
     <div class="card kpi" style="margin:0"><div class="l">Fraîcheur (TSB)</div><div class="v">${f.tsb}</div><div class="s ${tc}">${tl}</div></div>
     <div class="card kpi" style="margin:0"><div class="l">Charge 7j / 28j</div><div class="v">${r.acwr ?? '—'}</div><div class="s ${ac}">${al}</div></div>
-    ${D.plan ? `<div class="card kpi" style="margin:0"><div class="l">${esc(D.goal.distance_km)} km aujourd'hui</div><div class="v">${esc(D.plan.predicted)}</div><div class="s muted">objectif ${esc(D.goal.target)}</div></div>` : ''}
+    ${D.plan ? `<div class="card kpi" style="margin:0"><div class="l">${esc(D.goal.distance_km)} km aujourd'hui</div><div class="v">${esc(D.plan.predicted)}</div><div class="s muted">objectif ${esc(D.goal.target)}${D.plan.confiance !== 'bonne' ? ' · estimation peu fiable' : ''}</div></div>` : ''}
   </div>`;
 }
 function goalForm(existing) {
@@ -403,7 +403,7 @@ async function boot() {
     } else codeScreen = q.get('code');
   }
   if (ctx.meta.goal && ctx.meta.plan && ctx.meta.plan.generated !== today()) { // nouveau jour : le plan se recale sur le réalisé
-    try { await db.setMeta('plan', E.updatePlan(ctx, today())); ctx = await db.loadContext(); } catch (e) { /* course passée, etc. */ }
+    try { await db.setMeta('plan', E.updatePlan(ctx, today())); ctx = await db.loadContext(); } catch (e) { setStatus(e.message, true); }
   }
   D = E.dashboard(ctx, today());
   render();

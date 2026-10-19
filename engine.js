@@ -60,6 +60,15 @@ export function fmtTime(s) {
   const h = Math.floor(s / 3600), r = s % 3600, mm = String(Math.floor(r / 60)).padStart(2, '0'), ss = String(r % 60).padStart(2, '0');
   return h ? `${h}h${mm}'${ss}` : `${Math.floor(r / 60)}'${ss}`;
 }
+/** « 1:45:00 », « 1:45 » (h:mm) ou « 45:00 » (mm:ss) -> secondes ; refuse un temps incompatible avec la distance. */
+export function parseGoalTime(txt, distKm) {
+  const p = txt.trim().split(':').map(x => (/^\d+$/.test(x) ? Number(x) : NaN));
+  if (p.length < 2 || p.length > 3 || p.some(Number.isNaN)) throw new Error('Temps visé invalide (ex. 1:45:00).');
+  const cands = p.length === 3 ? [p[0] * 3600 + p[1] * 60 + p[2]] : [p[0] * 3600 + p[1] * 60, p[0] * 60 + p[1]];
+  const ok = cands.filter(c => c / distKm >= 140 && c / distKm <= 900); // de 2:20 à 15:00 par km
+  if (!ok.length) throw new Error(`Ce temps ne correspond pas à ${distKm} km. Écrivez-le en h:mm:ss, par ex. 1:45:00.`);
+  return ok[0];
+}
 export function parseTime(txt) {
   const p = txt.split(':').map(Number);
   while (p.length < 3) p.unshift(0);
@@ -202,7 +211,7 @@ const LAYOUT = { 3: '1Q 3E 6L', 4: '1Q 3E 5E 6L', 5: '1Q 2E 3S 5E 6L', 6: '0E 1Q
 const cap = (table, x) => { for (const [lim, v] of table) if (x <= lim) return v; return table[table.length - 1][1]; };
 
 export function setGoal(name, distanceKm, raceDate, targetTime, days, today) {
-  return { name, distance_km: distanceKm, date: raceDate, target_s: parseTime(targetTime), days, plan_start: mondayOf(today) };
+  return { name, distance_km: distanceKm, date: raceDate, target_s: parseGoalTime(targetTime, distanceKm), days, plan_start: mondayOf(today) };
 }
 
 export function races(ctx) {
@@ -241,7 +250,7 @@ function phaseOf(n, total, dist) {
 
 const sess = (kind, d, km, extra = {}) => ({ date: d, kind, km: r1(km), ...extra });
 
-function weekSessions(monday, phase, km, g, raceInWeek) {
+function weekSessions(monday, phase, km, g, raceInWeek, paces) {
   const dist = g.distance_km, days = g.days, rd = g.date;
   if (raceInWeek) {
     const s = [];
@@ -252,32 +261,40 @@ function weekSessions(monday, phase, km, g, raceInWeek) {
     s.push(sess('race', rd, dist));
     return s.sort((a, b) => (a.date < b.date ? -1 : 1));
   }
-  const slots = LAYOUT[Math.min(Math.max(days, 3), 6)].split(' ');
-  const longKm = Math.min(km * (days >= 5 ? 0.28 : 0.32), cap(LONG_CAP, dist));
-  const nQ = slots.filter(x => 'QS'.includes(x[1])).length, qKm = km * 0.2;
-  const nEasy = slots.filter(x => x[1] === 'E').length;
-  const easyKm = Math.max((km - longKm - nQ * qKm) / Math.max(nEasy, 1), 4);
-  return slots.map(x => {
+  const slots = LAYOUT[Math.min(Math.max(days, 3), 6)].split(' '), qKm = km * 0.2;
+  const fixed = slots.map(x => {
     const d = addDays(monday, Number(x[0])), k = x[1];
-    if (k === 'L') return sess('long', d, longKm);
-    if (k === 'E') return sess('easy', d, easyKm);
-    if (k === 'Q') return quality(d, qKm, phase, km, g);
-    return second(d, qKm, phase, km);
+    return k === 'Q' ? quality(d, qKm, phase, km, g, paces) : k === 'S' ? second(d, qKm, phase, km) : null;
   });
+  const qTotal = sum(fixed.filter(Boolean), f => f.km), nEasy = slots.filter(x => x[1] === 'E').length;
+  const longKm = Math.min(Math.max((km - qTotal) / (1 + 0.7 * nEasy), 5), cap(LONG_CAP, dist)); // la sortie longue reste la plus longue
+  const easyKm = Math.max(Math.min((km - qTotal - longKm) / Math.max(nEasy, 1), longKm * 0.9), 4);
+  return slots.map((x, i) => fixed[i] || sess(x[1] === 'L' ? 'long' : 'easy', addDays(monday, Number(x[0])), x[1] === 'L' ? longKm : easyKm));
 }
 
-function quality(d, qkm, phase, km, g) {
+// La séance est toujours assez longue pour son contenu (échauffement + retour au calme = 3 km).
+function quality(d, qkm, phase, km, g, paces) {
   if (phase === 'base') return sess('fartlek', d, qkm, { n: Math.max(5, Math.min(10, rnd(km / 6))) });
-  if (phase === 'construction') return sess('tempo', d, qkm, { minutes: Math.trunc(Math.min(40, Math.max(15, km * 0.6))) });
-  if (phase === 'spécifique') return sess('race_pace', d, qkm, { km_rp: r1(Math.min(g.distance_km * 0.5, Math.max(3, km * 0.22))) });
-  return sess('race_pace', d, qkm * 0.7, { km_rp: 3.0 });
+  if (phase === 'construction') {
+    const minutes = Math.trunc(Math.min(40, Math.max(15, km * 0.6)));
+    return sess('tempo', d, Math.max(qkm, 3 + minutes * 60 / paces.T), { minutes });
+  }
+  if (phase === 'spécifique') {
+    const rp = r1(Math.min(g.distance_km * 0.5, Math.max(3, km * 0.22)));
+    return sess('race_pace', d, Math.max(qkm, rp + 3), { km_rp: rp });
+  }
+  return sess('race_pace', d, Math.max(qkm * 0.7, 6), { km_rp: 3.0 });
 }
-const second = (d, qkm, phase, km) =>
-  phase === 'construction' || phase === 'spécifique'
-    ? sess('interval', d, qkm, { n: Math.trunc(Math.min(8, Math.max(4, km / 8))) })
-    : sess('strides', d, qkm * 0.6);
+function second(d, qkm, phase, km) {
+  if (phase === 'construction' || phase === 'spécifique') {
+    const n = Math.trunc(Math.min(8, Math.max(4, km / 8)));
+    return sess('interval', d, Math.max(qkm, 3 + n * 1.3), { n });
+  }
+  return sess('strides', d, qkm * 0.6);
+}
+const sumKm = ss => r1(sum(ss, x => x.km));
 
-function buildWeeks(g, firstMonday, baseKm, startIdx, raceMonday, total) {
+function buildWeeks(g, firstMonday, baseKm, startIdx, raceMonday, total, paces) {
   const weeks = [], capKm = Math.min(cap(PEAK_CAP, g.distance_km), Math.max(baseKm * 1.5, baseKm + 15));
   let b = baseKm, peak = 0, m = firstMonday, idx = startIdx;
   while (m <= raceMonday) {
@@ -293,7 +310,8 @@ function buildWeeks(g, firstMonday, baseKm, startIdx, raceMonday, total) {
       else { b = Math.min(b * (phase === 'base' ? 1.06 : 1.08), capKm); km = b; chain = b; }
       peak = Math.max(peak, b);
     }
-    weeks.push({ monday: m, phase, km: r1(km), chain_km: r1(chain), recovery, sessions: weekSessions(m, phase, km, g, n === 0) });
+    const sessions = weekSessions(m, phase, km, g, n === 0, paces);
+    weeks.push({ monday: m, phase, km: sumKm(sessions), chain_km: r1(chain), recovery, sessions });
     m = addDays(m, 7); idx++;
   }
   return weeks;
@@ -306,8 +324,11 @@ export function updatePlan(ctx, today, forceNew = false) {
   const raceMonday = mondayOf(g.date), cur = mondayOf(today);
   if (cur > raceMonday) throw new Error('La date de course est passée : définissez un nouvel objectif.');
   const total = Math.trunc(diffDays(raceMonday, g.plan_start) / 7) + 1;
+  const gp = g.target_s / g.distance_km;
+  if (!(gp >= 140 && gp <= 900)) throw new Error(`Le temps visé enregistré est incohérent avec la distance (${fmtPace(gp)}) : corrigez l'objectif.`);
   const gv = vdot(g.distance_km * 1000, g.target_s);
   const [vd, src, conf] = currentVdot(ctx, today, gv);
+  const paces = trainingPaces(vd);
   const old = forceNew ? null : ctx.meta.plan;
   const notes = [], rep = report(ctx, today);
   let weeks;
@@ -331,11 +352,11 @@ export function updatePlan(ctx, today, forceNew = false) {
       }
     }
     base = Math.max(base, 12);
-    weeks = first <= raceMonday ? [...frozen, ...buildWeeks(g, first, base, frozen.length, raceMonday, total)] : frozen;
+    weeks = first <= raceMonday ? [...frozen, ...buildWeeks(g, first, base, frozen.length, raceMonday, total, paces)] : frozen;
     if (old.vdot && Math.abs(vd - old.vdot) >= 0.5) notes.push(`Niveau réévalué : VDOT ${fl(old.vdot)} → ${fl(vd)} (${src}). Allures mises à jour.`);
   } else {
     const base = Math.max(runKm(ctx, addDays(cur, -28), cur) / 4, 12);
-    weeks = buildWeeks(g, cur, base, 0, raceMonday, total);
+    weeks = buildWeeks(g, cur, base, 0, raceMonday, total, paces);
     notes.push(`Plan créé : base de départ ${rnd(base)} km/semaine (moyenne des 4 dernières semaines).`);
   }
 
@@ -343,14 +364,19 @@ export function updatePlan(ctx, today, forceNew = false) {
   if (rep.acwr && (rep.acwr > 1.5 || f.tsb < -25)) {
     const nxt = weeks.find(w => w.monday > cur && w.phase !== 'affûtage');
     if (nxt) {
-      nxt.km = r1(nxt.km * 0.7);
-      nxt.sessions = weekSessions(nxt.monday, nxt.phase, nxt.km, g, false);
+      nxt.sessions = weekSessions(nxt.monday, nxt.phase, r1(nxt.km * 0.7), g, false, paces);
+      nxt.km = sumKm(nxt.sessions);
       notes.push(`Fatigue élevée (ACWR ${fl(rep.acwr)}, fraîcheur ${fl(f.tsb)}) : semaine du ${nxt.monday} allégée de 30 %.`);
     }
   }
 
   const pred = predictTime(vd, g.distance_km * 1000), weeksLeft = Math.trunc(diffDays(raceMonday, cur) / 7), gap = gv - vd;
-  if (gap > 0.15 * weeksLeft + 0.5) {
+  if (weeksLeft <= (g.distance_km <= 25 ? 2 : 3)) {
+    notes.push(`La course est très proche (${weeksLeft} semaine(s) avant la semaine de course) : le plan se limite à l'affûtage. Sorties faciles, repos, et pas de séance dure.`);
+  }
+  if (conf !== 'bonne') {
+    notes.push('Niveau estimé avec prudence (pas de course récente) : allures et temps prédit peu fiables. Marquez une course récente avec 🏁 pour les affiner.');
+  } else if (gap > 0.15 * weeksLeft + 0.5) {
     notes.push(`⚠ Objectif ambitieux : il faudrait gagner ${fl(rnd(gap, 1))} points de VDOT en ${weeksLeft} semaines (~${fl(rnd(0.15 * weeksLeft, 1))} réaliste). Temps prédit aujourd'hui : ${fmtTime(pred)}.`);
   } else if (gap < -1.5) {
     notes.push(`Votre niveau actuel permet déjà ~${fmtTime(pred)} : vous pouvez viser plus ambitieux que ${fmtTime(g.target_s)}.`);

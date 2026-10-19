@@ -5,7 +5,7 @@ Une app qui s'installe sur l'écran d'accueil de l'iPhone. **Vos données resten
 
 Fichiers à publier (à plat, 13 fichiers) : `index.html`, `app.js`, `engine.js`, `db.js`, `strava.js`, `importer.js`, `coach.js`,
 `sw.js`, `manifest.webmanifest` et les 4 images `*.png`.
-Les dossiers `relay/` et `tests/` ne se publient pas.
+`worker.js` (relais Cloudflare, facultatif) n'est pas servi par l'app : il sert seulement à l'étape 4.
 
 ## 1. Publier l'app (une seule fois, ~10 min, gratuit)
 
@@ -39,7 +39,7 @@ Réglages › « Connexion directe à Strava » : Client ID / Secret d'une appli
 (« Authorization Callback Domain » = `VOTRE-NOM.github.io`), puis **Se connecter** ; si la page s'ouvre dans Safari,
 copiez le code affiché et collez-le dans Réglages › Coller le code. Un bouton **Synchroniser** apparaît alors.
 Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
-1. dash.cloudflare.com › Workers & Pages › **Create** › Worker › collez `relay/worker.js` › Deploy.
+1. dash.cloudflare.com › Workers & Pages › **Create** › Worker › collez `worker.js` › Deploy.
 2. Settings › Variables : `CLIENT_ID`, `CLIENT_SECRET` (type *Secret*), `ALLOWED_ORIGIN` = `https://VOTRE-NOM.github.io`.
 3. Réglages › « Adresse du relais » : l'adresse `https://….workers.dev`.
 
@@ -48,6 +48,6 @@ Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v3'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v4'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.
