@@ -33,6 +33,7 @@ export const getAll = store => tx(store, 'readonly', s => wrap(s.getAll()));
 export const get = (store, key) => tx(store, 'readonly', s => wrap(s.get(key)));
 export const put = (store, value, key) => tx(store, 'readwrite', s => wrap(key === undefined ? s.put(value) : s.put(value, key)));
 export const putMany = (store, values) => tx(store, 'readwrite', s => { values.forEach(v => s.put(v)); });
+export const del = (store, key) => tx(store, 'readwrite', s => wrap(s.delete(key)));
 export const clear = store => tx(store, 'readwrite', s => wrap(s.clear()));
 export const getMeta = key => get('meta', key);
 export const setMeta = (key, value) => put('meta', value, key);

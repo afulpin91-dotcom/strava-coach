@@ -1,6 +1,6 @@
 // Service worker : l'app s'ouvre hors ligne. Les appels à Strava ne sont jamais interceptés.
-const CACHE = 'strava-coach-v1';
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'app.js', 'engine.js', 'db.js', 'strava.js', 'coach.js',
+const CACHE = 'strava-coach-v3';
+const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'app.js', 'engine.js', 'db.js', 'strava.js', 'coach.js', 'importer.js',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });

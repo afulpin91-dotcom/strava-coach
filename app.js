@@ -2,6 +2,7 @@ import * as E from './engine.js';
 import * as db from './db.js';
 import * as S from './strava.js';
 import { buildPrompt } from './coach.js';
+import { importFiles } from './importer.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -138,13 +139,29 @@ function chartsSection() {
       ${rp.moyen_z3_pct > 25 ? '<br><span class="warn">Beaucoup de Z3 : zone grise, trop dur pour récupérer, pas assez pour progresser.</span>' : ''}</p>
       <p class="muted" style="font-size:13px">Bornes (${esc(z.source_bornes)}) : Z1 &lt; ${z.bornes_haute_z1_z4[0]} · Z2 &lt; ${z.bornes_haute_z1_z4[1]} · Z3 &lt; ${z.bornes_haute_z1_z4[2]} · Z4 &lt; ${z.bornes_haute_z1_z4[3]} bpm — précision : ${esc(z.precision)}</p></div>`;
 }
+const isManual = id => ctx.acts.find(a => a.id === id)?.source === 'manual';
+const raceIds = () => new Set(E.races(ctx).map(r => r.id));
 function activitiesSection() {
   const rows = D.report.dernieres_activites;
   return `<div class="card"><h2>Dernières activités</h2><div class="scroll"><table>
-    <tr><th>Date</th><th>Sport</th><th class="n">km</th><th class="n">min</th><th class="n">Allure</th><th class="n">FC moy</th><th class="n">D+</th></tr>
+    <tr><th>Date</th><th>Sport</th><th class="n">km</th><th class="n">min</th><th class="n">Allure</th><th class="n">FC moy</th><th class="n">D+</th><th title="Marquer comme course">🏁</th></tr>
     ${rows.map(a => `<tr><td>${fmtDate(a.date)}</td><td>${esc(a.sport)}</td><td class="n">${a.km}</td><td class="n">${a.duree_min}</td>
-      <td class="n">${esc(a.allure || '—')}</td><td class="n">${a.fc_moy ? Math.round(a.fc_moy) : '—'}</td><td class="n">${a.d_plus != null ? Math.round(a.d_plus) : '—'}</td></tr>`).join('')}
+      <td class="n">${esc(a.allure || '—')}</td><td class="n">${a.fc_moy ? Math.round(a.fc_moy) : '—'}</td><td class="n">${a.d_plus != null ? Math.round(a.d_plus) : '—'}</td>
+      <td><button class="mini ${raceIds().has(a.id) ? 'on' : ''}" data-race="${a.id}" aria-label="Course" title="Marquer comme course">🏁</button>${isManual(a.id) ? ` <button class="mini" data-del="${a.id}" aria-label="Supprimer" title="Supprimer cette séance">✕</button>` : ''}</td></tr>`).join('')}
   </table></div></div>`;
+}
+function manualSection() {
+  return `<details class="card"><summary><b>➕ Ajouter une séance</b> <span class="muted">sans passer par l'export</span></summary>
+    <form id="manualForm" style="margin-top:12px">
+      <div><label>Date</label><input name="date" type="date" required value="${today()}" max="${today()}"></div>
+      <div><label>Sport</label><select name="sport"><option value="Run">Course à pied</option><option value="TrailRun">Trail</option><option value="Ride">Vélo</option><option value="Walk">Marche</option><option value="Hike">Randonnée</option><option value="Workout">Autre</option></select></div>
+      <div><label>Distance (km)</label><input name="km" type="number" step="0.01" min="0" inputmode="decimal" required></div>
+      <div><label>Durée (min)</label><input name="min" type="number" step="1" min="1" inputmode="numeric" required></div>
+      <div><label>FC moyenne (facultatif)</label><input name="hr" type="number" min="40" max="230" inputmode="numeric"></div>
+      <div><label>Dénivelé + (m, facultatif)</label><input name="elev" type="number" min="0" inputmode="numeric"></div>
+      <div><label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" name="race" style="width:auto"> C'était une course</label></div>
+      <div><button class="primary" type="submit">Ajouter</button></div>
+    </form><div id="manualErr" class="err"></div></details>`;
 }
 function coachSection() {
   return `<div class="card"><h2>🧠 Mon coach</h2>
@@ -194,23 +211,25 @@ async function doSync(withStreams) {
 
 /* ---------- vues ---------- */
 function homeView() {
-  if (!configured()) {
-    return `<div class="card banner"><h2>Pour commencer</h2><p>Reliez l'app à votre compte Strava (gratuit, une seule fois).</p>
-      <button class="primary" data-go="settings">Ouvrir les réglages</button></div>`;
-  }
-  if (!tokens) {
-    return `<div class="card banner"><h2>Connexion à Strava</h2><p>Dernière étape : autoriser l'accès à vos activités.</p>
-      <button class="primary" data-go="settings">Se connecter</button></div>`;
-  }
   if (!D.has_data) {
-    return `<div class="card banner"><h2>Aucune activité pour l'instant</h2><p>Touchez <b>Synchroniser</b> en haut de l'écran.</p></div>` + planSection();
+    return `<div class="card banner"><h2>Pour commencer</h2>
+      <p>Importez l'export de vos données Strava : c'est gratuit et tout reste sur ce téléphone.</p>
+      <button class="primary" data-go="settings">Importer mon export</button></div>` + planSection() + manualSection();
   }
-  return kpis() + planSection() + chartsSection() + activitiesSection() + coachSection();
+  return kpis() + planSection() + chartsSection() + activitiesSection() + manualSection() + coachSection();
 }
 
 function settingsView() {
   const s = ctx.settings, host = location.host;
-  return `<div class="card"><h2>1. Application Strava</h2>
+  return `<div class="card"><h2>1. Importer mon export Strava <span class="tag">gratuit</span></h2>
+    <ol class="steps muted"><li>Sur strava.com : Paramètres › Mon compte › « Télécharger ou supprimer votre compte » › demandez l'archive.</li>
+      <li>Téléchargez le ZIP reçu par e-mail (dans Fichiers).</li>
+      <li>Touchez ci-dessous et choisissez le ZIP (ou des fichiers FIT / GPX / TCX).</li></ol>
+    <input id="importFile" type="file" multiple>
+    <p class="muted" style="font-size:13px">Les fichiers FIT contiennent la fréquence cardiaque (zones précises). Les GPX n'en ont pas : seuls la distance, la durée et le dénivelé sont utilisés. Un nouvel import n'ajoute que les nouveautés.</p></div>
+  <details class="card"><summary><b>2. Connexion directe à Strava</b> <span class="tag">abonnement Strava requis</span></summary>
+    <p class="muted">Strava réserve désormais son API aux abonnés. Inutile si vous importez votre export.</p>
+    <h2 style="margin-top:12px">Application Strava</h2>
     <ol class="steps muted"><li>Sur <b>strava.com/settings/api</b>, créez une application (gratuit).</li>
     <li>« Authorization Callback Domain » : <code>${esc(location.hostname)}</code></li>
     <li>Copiez le Client ID (et le Client Secret si vous n'utilisez pas de relais).</li></ol>
@@ -223,15 +242,15 @@ function settingsView() {
       <div><label>Zones FC manuelles <span class="muted">(limites hautes Z1 à Z4, ex. 114,133,152,171)</span></label><input name="fcZones" value="${esc(s.fcZones || '')}"></div>
       <div><button class="primary" type="submit">Enregistrer</button></div>
     </form></div>
-  <div class="card"><h2>2. Connexion ${tokens ? '<span class="ok">✓ connecté</span>' : ''}</h2>
+  <div style="margin-top:14px"><h2>Connexion ${tokens ? '<span class="ok">✓ connecté</span>' : ''}</h2>
     <div class="row"><button id="connectBtn" ${configured() ? '' : 'disabled'}>Se connecter à Strava</button><button id="testBtn">Tester la connexion directe</button></div>
     <p class="muted" style="font-size:13px">Si, après l'autorisation, la page s'ouvre dans Safari au lieu de l'app, copiez le code affiché puis collez-le ici :</p>
     <form id="codeForm" style="grid-template-columns:1fr auto"><input name="code" placeholder="Code ou adresse complète" autocomplete="off"><button>Valider</button></form>
-    <div id="testOut" class="muted" style="margin-top:8px"></div></div>
+    <div id="testOut" class="muted" style="margin-top:8px"></div></div></details>
   <div class="card"><h2>3. Données</h2>
     <p class="muted">Tout est stocké uniquement sur cet appareil. Faites une sauvegarde de temps en temps.</p>
     <div class="row"><button id="exportBtn">Exporter une sauvegarde</button>
-      <label style="margin:0"><span class="muted">Importer une sauvegarde</span><input id="importFile" type="file" accept="application/json"></label></div>
+      <label style="margin:0"><span class="muted">Restaurer une sauvegarde</span><input id="restoreFile" type="file" accept="application/json"></label></div>
     <button id="wipeBtn" style="color:var(--bad)">Effacer toutes les données</button></div>`;
 }
 
@@ -310,13 +329,60 @@ function bind() {
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `strava-coach-${today()}.json` });
     a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   };
-  const im = $('#importFile');
+  const im = $('#restoreFile');
   if (im) im.onchange = async () => {
     try { await db.importAll(JSON.parse(await im.files[0].text())); setStatus('Sauvegarde importée ✓'); await refresh(); }
     catch (err) { setStatus(err.message, true); }
   };
   const wb = $('#wipeBtn');
   if (wb) wb.onclick = async () => { if (confirm('Effacer toutes les données et réglages de cet appareil ?')) { await db.wipe(); setStatus('Données effacées.'); await refresh(); } };
+  const imp = $('#importFile');
+  if (imp) imp.onchange = async () => {
+    const files = [...imp.files]; if (!files.length) return;
+    try {
+      const have = new Map((await db.getAll('activities')).map(a => [a.id, a]));
+      const st = await importFiles(files, async (acts, streams) => {
+        const fresh = acts.filter(a => !have.has(a.id) || have.get(a.id).source === 'export'); // ne pas écraser les données de l'API
+        await db.putMany('activities', fresh); await db.putMany('streams', streams);
+        fresh.forEach(a => have.set(a.id, a));
+      }, setStatus);
+      ctx = await db.loadContext();
+      if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e) { /* date de course passée, etc. */ } }
+      let msg = `${st.imported} activité(s) importée(s), dont ${st.withHr} avec fréquence cardiaque détaillée.`;
+      if (st.skipped) msg += ` ${st.skipped} fichier(s) ignoré(s)` + (st.errors.length ? ` (${st.errors[0]})` : '') + '.';
+      if (!st.found) msg = "Aucun fichier d'activité (FIT, GPX, TCX) trouvé dans cette sélection.";
+      setStatus(msg, !st.found); if (st.imported) view = 'home';
+    } catch (e) { setStatus(e.message, true); }
+    await refresh();
+  };
+  document.querySelectorAll('[data-race]').forEach(b => b.onclick = async () => {
+    const id = Number(b.dataset.race), ids = new Set(ctx.meta.manual_races || []);
+    ids.has(id) ? ids.delete(id) : ids.add(id);
+    await db.setMeta('manual_races', [...ids]); ctx = await db.loadContext();
+    if (ctx.meta.goal && ctx.meta.plan) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e) { /* ignore */ } }
+    await refresh();
+  });
+  const mf = $('#manualForm');
+  if (mf) mf.onsubmit = async e => {
+    e.preventDefault();
+    const b = Object.fromEntries(new FormData(mf)), km = Number(b.km), min = Number(b.min);
+    if (!(km > 0) || !(min > 0)) { $('#manualErr').textContent = 'Distance et durée doivent être positives.'; return; }
+    await db.put('activities', {
+      id: Date.now(), name: ({ Run: 'Course à pied', TrailRun: 'Trail', Ride: 'Vélo', Walk: 'Marche', Hike: 'Randonnée', Workout: 'Séance' })[b.sport] + ' (saisie)',
+      sport: b.sport, start_date: `${b.date}T12:00:00Z`, distance_m: Math.round(km * 1000), moving_s: Math.round(min * 60),
+      elevation_m: b.elev ? Math.round(Number(b.elev)) : null, avg_hr: b.hr ? Number(b.hr) : null, avg_speed: km * 1000 / (min * 60),
+      perceived_exertion: null, workout_type: b.race ? 1 : null, source: 'manual',
+    });
+    ctx = await db.loadContext();
+    if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (err) { /* ignore */ } }
+    setStatus('Séance ajoutée ✓ — plan mis à jour.'); await refresh();
+  };
+  document.querySelectorAll('[data-del]').forEach(b => b.onclick = async () => {
+    if (!confirm('Supprimer cette séance ?')) return;
+    await db.del('activities', Number(b.dataset.del)); ctx = await db.loadContext();
+    if (ctx.meta.goal && ctx.meta.plan) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (err) { /* ignore */ } }
+    await refresh();
+  });
   const cc = $('#copyCode'); if (cc) cc.onclick = async () => { try { await navigator.clipboard.writeText(codeScreen); cc.textContent = 'Copié ✓'; } catch { $('#codeBox').select(); } };
 }
 
@@ -335,6 +401,9 @@ async function boot() {
       try { await S.exchangeCode(ctx.settings, q.get('code')); tokens = await db.getMeta('tokens'); setStatus('Connecté à Strava ✓ — touchez Synchroniser.'); }
       catch (e) { setStatus(e.message, true); }
     } else codeScreen = q.get('code');
+  }
+  if (ctx.meta.goal && ctx.meta.plan && ctx.meta.plan.generated !== today()) { // nouveau jour : le plan se recale sur le réalisé
+    try { await db.setMeta('plan', E.updatePlan(ctx, today())); ctx = await db.loadContext(); } catch (e) { /* course passée, etc. */ }
   }
   D = E.dashboard(ctx, today());
   render();
