@@ -56,11 +56,24 @@ Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 - **Niveau :** sans course, l'app l'estime depuis l'allure et la FC de vos sorties (il faut donc une FC max et une FC repos
   justes dans Réglages). « Affiner mon niveau » permet d'ajouter une course ou un test en quelques secondes.
 
+## Le coach (IA) : relire sa réponse dans l'app
+
+1. **① Générer le message** : il contient vos chiffres, votre plan, votre état du jour et les remarques déjà reçues.
+   Collez-le dans une IA (Claude, ChatGPT…).
+2. **② Collez sa réponse complète** dans l'app, puis **Lire la réponse**. L'app extrait le bloc de séances,
+   le contrôle (jours choisis, volume raisonnable, 3 séances dures maximum, pas de séance dure la veille de la course,
+   pas de séance en pause) et vous montre un aperçu : séances retenues, refusées et pourquoi.
+3. **Appliquer** remplace les séances automatiques sur ces jours. Suivi, déplacement et pause fonctionnent dessus ;
+   🧠 repère les séances du coach, et « Revenir au plan automatique » annule tout.
+4. Les remarques du coach (douleur, préférence…) sont gardées en mémoire et renvoyées dans vos prochains messages.
+
+Rien n'est appliqué sans votre validation, et une réponse mal formée est refusée avec un message.
+
 ## À savoir
 
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v7'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v8'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

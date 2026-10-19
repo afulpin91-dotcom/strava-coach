@@ -440,6 +440,7 @@ export function updatePlan(ctx, today, forceNew = false) {
   } else if (gap < -1.5) {
     notes.push(`Votre niveau actuel permet déjà ~${fmtTime(pred)} : vous pouvez viser plus ambitieux que ${fmtTime(g.target_s)}.`);
   }
+  if (ctx.meta.coach && ctx.meta.coach.window.to >= addDays(today, -14)) applyCoach(weeks, ctx.meta.coach);
   if (pauseActive) { // aucune séance pendant la pause
     for (const w of weeks) if (addDays(w.monday, 6) >= pause.from) {
       w.sessions = w.sessions.filter(x => x.date < pause.from); w.km = sumKm(w.sessions); w.paused = w.sessions.length === 0;
@@ -448,6 +449,116 @@ export function updatePlan(ctx, today, forceNew = false) {
   }
   applyMoves(weeks, ctx.meta.moves);
   return { v: PLAN_VERSION, generated: today, vdot: vd, vdot_source: src, confiance: conf, vdot_objectif: r1(gv), temps_predit_s: rnd(pred), weeks, notes };
+}
+
+/* ---------- séances proposées par le coach (réponse de l'IA collée dans l'app) ---------- */
+export const COACH_KINDS = { easy: 'footing facile', long: 'sortie longue', tempo: 'séance au seuil', interval: 'intervalles',
+  fartlek: 'fartlek', strides: 'footing + lignes droites', race_pace: 'allure course' };
+const HARD = new Set(['tempo', 'interval', 'fartlek', 'race_pace']);
+const DAY_NAMES = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
+export const dayNames = g => layoutFor(g).map(x => DAY_NAMES[x[0]]);
+
+/** Premier objet JSON équilibré à partir de `start` (tient compte des chaînes). */
+function balanced(text, start) {
+  let depth = 0, str = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (str) { if (esc) esc = false; else if (c === '\\') esc = true; else if (c === '"') str = false; continue; }
+    if (c === '"') str = true; else if (c === '{') depth++; else if (c === '}' && --depth === 0) return text.slice(start, i + 1);
+  }
+  return null;
+}
+function extractCoachJson(text) {
+  const cands = [...text.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(m => m[1]);
+  const i = text.lastIndexOf('"plan_coach"');
+  if (i >= 0) { const st = text.lastIndexOf('{', i), b = st >= 0 ? balanced(text, st) : null; if (b) cands.push(b); }
+  for (const c of cands.reverse()) {
+    const clean = c.replace(/[\u201c\u201d]/g, '"').replace(/,\s*([}\]])/g, '$1').trim();
+    try { const o = JSON.parse(clean); if (o && typeof o === 'object' && (o.plan_coach || o.seances)) return o; } catch { /* essai suivant */ }
+  }
+  throw new Error("Je ne trouve pas le bloc JSON dans la réponse. Collez la réponse complète de l'IA, y compris la fin (le bloc entre ```json et ```).");
+}
+
+/** Lit la réponse de l'IA et contrôle chaque séance. Ne modifie rien : retourne ce qui serait appliqué et ce qui est refusé. */
+export function parseCoachReply(text, ctx, today) {
+  const g = ctx.meta.goal;
+  if (!g) throw new Error("Créez d'abord un objectif.");
+  if (ctx.meta.pause && !ctx.meta.pause.to) throw new Error("Vous êtes en pause : reprenez l'entraînement avant d'appliquer des séances.");
+  const raw = extractCoachJson(String(text || '')), pc = raw.plan_coach ?? raw;
+  const list = Array.isArray(pc.seances) ? pc.seances : null;
+  if (!list?.length) throw new Error('Aucune séance dans le bloc JSON (champ « seances »).');
+  if (list.length > 14) throw new Error('Trop de séances (14 maximum).');
+  const mine = new Set(layoutFor(g).map(x => x[0])), horizon = addDays(today, 13), rejected = [], valid = [], seen = new Set();
+  const cap = k => (k === 'long' ? 35 : 25);
+  for (const x of list) {
+    const d = String(x?.date ?? ''), kind = String(x?.kind ?? x?.type ?? ''), km = Number(x?.km);
+    const consigne = String(x?.consigne ?? '').replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 200);
+    const label = `${/^\d{4}-\d{2}-\d{2}$/.test(d) ? d : '?'} ${kind || '?'}`;
+    const no = reason => rejected.push({ label, reason });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || iso(pd(d)) !== d) no('date invalide');
+    else if (d < today) no('date passée');
+    else if (d > horizon) no('trop loin (14 jours maximum)');
+    else if (d >= g.date) no(d === g.date ? 'jour de la course' : 'après la course');
+    else if (!COACH_KINDS[kind]) no('type de séance inconnu');
+    else if (!Number.isFinite(km) || km < 2) no('distance invalide');
+    else if (km > cap(kind)) no(`distance excessive (${cap(kind)} km maximum pour ce type)`);
+    else if (!mine.has(weekday(d))) no(`jour non disponible (vos jours : ${dayNames(g).join(', ')})`);
+    else if (seen.has(d)) no('deux séances le même jour');
+    else if (HARD.has(kind) && addDays(d, 1) === g.date) no('séance dure la veille de la course');
+    else { seen.add(d); valid.push({ key: `coach-${kind}@${d}`, date: d, kind, km: r1(km), coach: true, consigne }); }
+  }
+  // garde-fous de volume et d'intensité par semaine civile
+  const avg4 = runKm(ctx, addDays(mondayOf(today), -28), mondayOf(today)) / 4, warnings = [];
+  valid.sort((a, b) => (a.date < b.date ? -1 : 1));
+  for (const mon of [...new Set(valid.map(v => mondayOf(v.date)))]) {
+    const planned = ctx.meta.plan?.weeks.find(w => w.monday === mon)?.km || 0, limit = r1(1.35 * Math.max(avg4, planned, 12));
+    const done = mon < today ? runKm(ctx, mon, today) : 0;
+    let week = valid.filter(v => mondayOf(v.date) === mon);
+    while (week.length && done + sum(week, v => v.km) > limit) { const out = week.pop(); valid.splice(valid.indexOf(out), 1); rejected.push({ label: `${out.date} ${out.kind}`, reason: `dépasse le volume raisonnable de la semaine (${limit} km maximum)` }); }
+    week = valid.filter(v => mondayOf(v.date) === mon);
+    const hard = week.filter(v => HARD.has(v.kind));
+    for (const out of hard.slice(3)) { valid.splice(valid.indexOf(out), 1); rejected.push({ label: `${out.date} ${out.kind}`, reason: 'plus de 3 séances dures dans la semaine' }); }
+    const hd = valid.filter(v => mondayOf(v.date) === mon && HARD.has(v.kind));
+    if (hd.length === 3) warnings.push(`Semaine du ${mon} : 3 séances dures, c'est beaucoup.`);
+    for (let i = 1; i < hd.length; i++) if (diffDays(hd[i].date, hd[i - 1].date) === 1) warnings.push(`Deux séances dures de suite (${hd[i - 1].date} et ${hd[i].date}).`);
+  }
+  if (!valid.length) throw new Error(`Aucune séance utilisable : ${rejected.slice(0, 3).map(r => `${r.label} (${r.reason})`).join(' ; ') || 'liste vide'}.`);
+  const notes = (Array.isArray(pc.notes) ? pc.notes : []).map(n => String(n).replace(/[\u0000-\u001f]/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 5);
+  return { valid, rejected, warnings, notes, window: { from: today, to: valid[valid.length - 1].date } };
+}
+
+/** Repères donnés à l'IA pour que sa proposition passe les contrôles de l'app. */
+export function coachContext(ctx, today) {
+  const g = ctx.meta.goal;
+  if (!g) return null;
+  const avg4 = runKm(ctx, addDays(mondayOf(today), -28), mondayOf(today)) / 4;
+  const planned = ctx.meta.plan?.weeks.find(w => w.monday === mondayOf(today))?.km || 0;
+  const days = Array.from({ length: 7 }, (_, i) => addDays(today, i)), mine = new Set(layoutFor(g).map(x => x[0]));
+  return { days: dayNames(g), weeklyKm: rnd(avg4), maxWeekKm: rnd(1.3 * Math.max(avg4, planned, 12)), from: today, to: days[6],
+    example: days.find(d => mine.has(weekday(d)) && d < g.date) || days[0] };
+}
+
+/** Enregistrement à conserver une fois la proposition validée par l'utilisateur. */
+export const coachRecord = (res, today) => ({ applied: today, window: res.window, sessions: res.valid, notes: res.notes });
+
+/** Remplace, sur la fenêtre du coach, les séances automatiques par celles du coach (la course est conservée). */
+export function applyCoach(weeks, coach) {
+  if (!coach?.sessions?.length) return;
+  const { from, to } = coach.window;
+  for (const w of weeks) {
+    if (addDays(w.monday, 6) < from || w.monday > to) continue;
+    const kept = w.sessions.filter(x => x.kind === 'race' || !((x.date >= from && x.date <= to) || String(x.key).startsWith('coach-')));
+    const mineW = coach.sessions.filter(x => x.date >= w.monday && x.date <= addDays(w.monday, 6)).map(x => ({ ...x }));
+    w.sessions = [...kept, ...mineW].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    w.km = sumKm(w.sessions); w.paused = false;
+  }
+}
+
+/** Mémoire du coach : remarques déjà reçues, renvoyées dans les messages suivants (10 maximum). */
+export function addCoachMemory(memory, notes, today) {
+  const out = [...(memory || [])];
+  for (const n of notes) if (!out.some(m => m.text === n)) out.push({ date: today, text: n });
+  return out.slice(-10);
 }
 
 /** Applique les séances déplacées par l'utilisateur ({ key, to }) : la clé est stable d'une reconstruction à l'autre. */
@@ -505,6 +616,10 @@ export function describe(s, paces, g) {
   const [E, T, I] = ['E', 'T', 'I'].map(k => fmtPace(paces[k]));
   const gp = fmtPace(g.target_s / g.distance_km);
   const k = s.kind;
+  if (s.coach) {
+    const pace = { easy: E, long: E, strides: E, tempo: '~' + T, interval: '~' + I, fartlek: '~' + I, race_pace: gp }[k];
+    return `${s.km} km · ${COACH_KINDS[k]}${s.consigne ? ' — ' + s.consigne : ''} (${pace})`;
+  }
   if (k === 'easy') return `${s.km} km facile (${E})`;
   if (k === 'long') return `${s.km} km sortie longue, allure facile (${E})`;
   if (k === 'fartlek') return `${s.km} km avec ${s.n}×1' vif (~${I}) / 1'30 trot`;
@@ -528,7 +643,7 @@ export function planData(ctx, today) {
     paused: !!w.paused,
     sessions: w.sessions.map(s => {
       const k = s.key || `${s.kind}@${s.date}`, st = statuses[w.monday][k];
-      return { key: k, date: s.date, kind: s.kind, km: s.km, text: describe(s, paces, g), status: st.status, done_on: st.done_on || null, moved: k.split('@')[1] !== s.date };
+      return { key: k, date: s.date, kind: s.kind, km: s.km, text: describe(s, paces, g), status: st.status, done_on: st.done_on || null, moved: k.split('@')[1] !== s.date, coach: !!s.coach };
     }),
   }));
   return {
@@ -537,6 +652,7 @@ export function planData(ctx, today) {
       vdot: plan.vdot, vdot_source: plan.vdot_source, confiance: plan.confiance, vdot_objectif: plan.vdot_objectif,
       predicted: fmtTime(plan.temps_predit_s), paces: Object.fromEntries(Object.entries(paces).map(([k, v]) => [k, fmtPace(v)])),
       notes: plan.notes, weeks, pause: ctx.meta.pause || null,
+      coach: ctx.meta.coach ? { applied: ctx.meta.coach.applied, from: ctx.meta.coach.window.from, to: ctx.meta.coach.window.to, notes: ctx.meta.coach.notes } : null,
     },
   };
 }

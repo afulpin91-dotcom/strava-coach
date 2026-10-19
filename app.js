@@ -9,7 +9,8 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v7';
+const APP_VERSION = 'v8';
+let coachDraft = { reply: '', pending: null }; // réponse collée et aperçu en attente de validation
 const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 let D = null, ctx = null, tokens = null, view = 'home', busy = false, codeScreen = null;
 
@@ -102,6 +103,12 @@ function goalForm(existing) {
     <div><button class="primary" type="submit">${existing ? 'Mettre à jour l\'objectif' : 'Créer mon plan'}</button></div>
   </form><div id="goalErr" class="err"></div>`;
 }
+function coachBanner(p) {
+  if (!p.coach) return '';
+  return `<div class="card banner" style="margin:10px 0"><b>🧠 Séances proposées par le coach</b> <span class="muted">(du ${fmtDate(p.coach.from)} au ${fmtDate(p.coach.to)}, appliquées le ${fmtDate(p.coach.applied)})</span>
+    ${p.coach.notes.length ? `<ul class="notes">${p.coach.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    <button id="coachRevert" class="mini" style="opacity:1">Revenir au plan automatique</button></div>`;
+}
 function pauseBlock(p) {
   if (p.pause && !p.pause.to) {
     return `<div class="card banner" style="margin:10px 0"><b>⏸ En pause depuis le ${fmtDate(p.pause.from)}</b>
@@ -132,18 +139,20 @@ function planSection() {
   const icon = s => ({ done: `<span class="good" title="${s.done_on ? 'Fait le ' + fmtDate(s.done_on) : 'Fait'}">✓</span>`,
     missed: '<span class="bad" title="Manqué">✗</span>', pending: '<span class="warn" title="Pas encore fait cette semaine">⏳</span>', race: '🏁',
     upcoming: s.kind === 'race' ? '🏁' : `<button class="mini" data-move="${esc(s.key)}" aria-label="Déplacer" title="Déplacer cette séance">⇄</button>` })[s.status];
+  const tag = s => s.coach ? ' <span class="tag" title="Séance proposée par le coach">🧠</span>' : '';
   const note = s => s.done_on ? ` <span class="muted">(faite le ${fmtDate(s.done_on)})</span>` : s.moved ? ' <span class="muted">(déplacée)</span>' : '';
   const wk = (w, open) => `<details ${open ? 'open' : ''}><summary>
       <span><b>${fmtDate(w.monday)}</b> <span class="tag ${w.current ? 'cur' : ''}">${PHASE[w.phase] || w.phase}${w.recovery ? ' · récup' : ''}</span></span>
       <span class="muted">prévu ${Math.round(w.km)} km${w.actual != null ? ` · fait ${Math.round(w.actual)} km` : ''}</span></summary>
       ${w.paused ? '<p class="muted">⏸ Pause : aucune séance prévue.</p>' : ''}
-      ${w.sessions.map(s => `<div class="sess" data-week="${w.monday}"><span class="d">${fmtDate(s.date)}</span><span>${esc(s.text)}${note(s)}</span><span class="st">${icon(s)}</span></div>`).join('')}
+      ${w.sessions.map(s => `<div class="sess" data-week="${w.monday}"><span class="d">${fmtDate(s.date)}</span><span>${esc(s.text)}${tag(s)}${note(s)}</span><span class="st">${icon(s)}</span></div>`).join('')}
     </details>`;
   return `<div class="card">
     <h2>🎯 ${esc(g.name)} — ${esc(g.distance_km)} km le ${new Date(g.date + 'T12:00').toLocaleDateString('fr-FR', {day:'numeric', month:'long', year:'numeric'})} en ${esc(g.target)} (${esc(g.goal_pace)})</h2>
     <p class="muted" style="margin-top:-6px">Niveau VDOT ${p.vdot} (${esc(p.vdot_source)} — confiance ${esc(p.confiance)}) · objectif VDOT ${p.vdot_objectif}<br>
     Allures : ${Object.entries(p.paces).map(([k, v]) => `<b>${k}</b> ${v}`).join(' · ')}</p>
     ${p.notes.length ? `<ul class="notes">${p.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    ${coachBanner(p)}
     ${pauseBlock(p)}
     ${shown.slice(0, 3).map((w, i) => wk(w, i < 2)).join('')}
     <details><summary class="muted">Voir toutes les semaines (${shown.length - 3 > 0 ? shown.length - 3 : 0} de plus)</summary>
@@ -196,11 +205,35 @@ function manualSection() {
     </form><div id="manualErr" class="err"></div></details>`;
 }
 function coachSection() {
+  const mem = ctx.meta.coach_memory || [], hasGoal = !!ctx.meta.goal && !!ctx.meta.plan;
   return `<div class="card"><h2>🧠 Mon coach</h2>
-    <p class="muted">Génère un message complet (vos métriques, zones, plan) à coller dans un chat pour obtenir votre bilan et ajustements — gratuit.</p>
-    <button id="coachBtn">Générer le message pour le coach</button>
+    <p class="muted">① Générez le message et collez-le dans une IA (Claude, ChatGPT…). ② Collez ici sa réponse : l'app lit ses séances, vous les montre, et les applique à votre plan si vous validez.</p>
+    <label>Mon état du jour, mes contraintes <span class="muted">(facultatif)</span></label>
+    <textarea id="coachState" style="min-height:60px" placeholder="ex. mollet gauche tendu, voyage jeudi, peu de sommeil…">${esc(ctx.meta.coach_state || '')}</textarea>
+    <button id="coachBtn" style="margin-top:8px">① Générer le message pour le coach</button>
     <div id="coachOut" style="display:none;margin-top:12px"><textarea id="coachTxt" readonly></textarea>
-      <button id="copyBtn" class="primary" style="margin-top:8px">Copier</button></div></div>`;
+      <button id="copyBtn" class="primary" style="margin-top:8px">Copier</button></div>
+    <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
+    <label>② Réponse de l'IA <span class="muted">(collez-la en entier, y compris le bloc de code à la fin)</span></label>
+    ${hasGoal ? '' : '<p class="muted">Créez d\'abord un objectif : le coach propose des séances pour votre plan.</p>'}
+    <textarea id="coachReply" style="min-height:90px" placeholder="Collez ici la réponse complète de l'IA…" ${hasGoal ? '' : 'disabled'}>${esc(coachDraft.reply)}</textarea>
+    <button id="coachRead" style="margin-top:8px" ${hasGoal ? '' : 'disabled'}>Lire la réponse</button>
+    <div id="coachErr" class="err"></div>
+    <div id="coachPreview">${coachDraft.pending ? coachPreview(coachDraft.pending) : ''}</div>
+    ${mem.length ? `<details style="margin-top:12px"><summary class="muted">Mémoire du coach (${mem.length} remarque${mem.length > 1 ? 's' : ''}, renvoyées dans les messages suivants)</summary>
+      <ul class="notes">${mem.map(m => `<li><span class="muted">${esc(m.date)}</span> ${esc(m.text)}</li>`).join('')}</ul>
+      <button id="clearMem" class="mini" style="opacity:1">Effacer la mémoire</button></details>` : ''}</div>`;
+}
+function coachPreview(res) {
+  const paces = E.trainingPaces(ctx.meta.plan.vdot), g = ctx.meta.goal;
+  const current = d => ctx.meta.plan.weeks.flatMap(w => w.sessions).filter(x => x.date === d).map(x => E.describe(x, paces, g)).join(' ; ') || '— repos —';
+  return `<div class="card" style="margin:12px 0 0;border-color:var(--accent)"><h2 style="margin-bottom:6px">Proposition du coach</h2>
+    <p class="muted" style="margin:0 0 8px">Du ${fmtDate(res.window.from)} au ${fmtDate(res.window.to)} : ces séances remplacent celles du plan sur ces jours.</p>
+    ${res.valid.map(v => `<div class="sess"><span class="d">${fmtDate(v.date)}</span><span>${esc(E.describe(v, paces, g))}<br><span class="muted">Plan actuel : ${esc(current(v.date))}</span></span><span></span></div>`).join('')}
+    ${res.rejected.length ? `<p class="warn" style="margin:10px 0 2px"><b>Refusées par l'app</b> (non appliquées) :</p><ul class="notes">${res.rejected.map(r => `<li>${esc(r.label)} — ${esc(r.reason)}</li>`).join('')}</ul>` : ''}
+    ${res.warnings.length ? `<ul class="notes warn">${res.warnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>` : ''}
+    ${res.notes.length ? `<p style="margin:10px 0 2px"><b>Remarques du coach</b> (gardées en mémoire) :</p><ul class="notes">${res.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    <div class="row" style="margin:12px 0 0"><button class="primary" id="coachApply">Appliquer ces séances</button><button id="coachCancel">Annuler</button></div></div>`;
 }
 
 
@@ -221,8 +254,8 @@ async function saveGoal(f) {
   if (wd.length < 3 || wd.length > 6) throw new Error('Choisissez entre 3 et 6 jours de course par semaine.');
   if (!wd.includes(Number(b.long_day))) throw new Error('Le jour de la sortie longue doit faire partie des jours choisis.');
   const g = E.setGoal(b.name, Number(b.distance), b.date, b.time, wd.length, today(), { weekdays: wd, long_day: Number(b.long_day) });
-  ctx.meta.goal = g; ctx.meta.plan = null; ctx.meta.moves = []; ctx.meta.pause = null;
-  await db.setMeta('goal', g); await db.setMeta('moves', []); await db.delMeta('pause');
+  ctx.meta.goal = g; ctx.meta.plan = null; ctx.meta.moves = []; ctx.meta.pause = null; ctx.meta.coach = null;
+  await db.setMeta('goal', g); await db.setMeta('moves', []); await db.delMeta('pause'); await db.delMeta('coach');
   await db.setMeta('plan', E.updatePlan(ctx, today(), true));
 }
 
@@ -364,11 +397,39 @@ function bind() {
     await refresh();
   };
   const cb = $('#coachBtn');
-  if (cb) cb.onclick = () => {
-    const t = today();
-    $('#coachTxt').value = buildPrompt(D.report, E.summaryForCoach(ctx, t));
+  if (cb) cb.onclick = async () => {
+    const t = today(), state = $('#coachState').value.trim();
+    ctx.meta.coach_state = state;
+    $('#coachTxt').value = buildPrompt(D.report, E.summaryForCoach(ctx, t), { state, memory: ctx.meta.coach_memory, coachCtx: E.coachContext(ctx, t) });
     $('#coachOut').style.display = 'block';
+    await db.setMeta('coach_state', state);
   };
+  const cr = $('#coachRead');
+  if (cr) cr.onclick = () => {
+    coachDraft.reply = $('#coachReply').value; $('#coachErr').textContent = '';
+    try { coachDraft.pending = E.parseCoachReply(coachDraft.reply, ctx, today()); $('#coachPreview').innerHTML = coachPreview(coachDraft.pending); bind(); $('#coachPreview').scrollIntoView({ block: 'nearest' }); }
+    catch (e) { coachDraft.pending = null; $('#coachPreview').innerHTML = ''; $('#coachErr').textContent = e.message; }
+  };
+  const ca = $('#coachApply');
+  if (ca) ca.onclick = async () => {
+    const res = coachDraft.pending; if (!res) return;
+    try {
+      ctx.meta.coach = E.coachRecord(res, today()); await db.setMeta('coach', ctx.meta.coach);
+      ctx.meta.coach_memory = E.addCoachMemory(ctx.meta.coach_memory, res.notes, today()); await db.setMeta('coach_memory', ctx.meta.coach_memory);
+      await db.setMeta('plan', E.updatePlan(ctx, today()));
+      coachDraft = { reply: '', pending: null };
+      await refresh(); setStatus(`Séances du coach appliquées ✓ (${res.valid.length}).`);
+    } catch (e) { setStatus(e.message, true); }
+  };
+  const cx = $('#coachCancel'); if (cx) cx.onclick = () => { coachDraft.pending = null; $('#coachPreview').innerHTML = ''; };
+  const rv = $('#coachRevert');
+  if (rv) rv.onclick = async () => {
+    if (!confirm('Revenir au plan automatique ? Les séances du coach seront remplacées.')) return;
+    ctx.meta.coach = null; await db.delMeta('coach');
+    try { await db.setMeta('plan', E.updatePlan(ctx, today(), true)); } catch (e) { setStatus(e.message, true); }
+    await refresh(); setStatus('Plan automatique rétabli.');
+  };
+  const cm = $('#clearMem'); if (cm) cm.onclick = async () => { await db.setMeta('coach_memory', []); await refresh(); };
   const cp = $('#copyBtn');
   if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText($('#coachTxt').value); } catch { $('#coachTxt').select(); document.execCommand('copy'); } cp.textContent = 'Copié ✓'; setTimeout(() => cp.textContent = 'Copier', 1500); };
 
