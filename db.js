@@ -62,7 +62,7 @@ export function parseZones(txt) {
 /** Sauvegarde complète (jetons exclus). */
 export async function exportAll() {
   const settings = { ...((await getMeta('settings')) || {}) };
-  delete settings.clientSecret;
+  delete settings.clientSecret; delete settings.inboxToken;
   return {
     version: 1, exported: new Date().toISOString(), settings,
     activities: await getAll('activities'), streams: await getAll('streams'),
@@ -76,7 +76,7 @@ export async function importAll(d) {
   await putMany('activities', d.activities || []);
   await putMany('streams', d.streams || []);
   for (const k of ['goal', 'plan', 'manual_races', 'hr_zones', 'pause', 'moves', 'coach', 'coach_memory', 'coach_state']) if (d[k] != null) await setMeta(k, d[k]);
-  await setMeta('settings', { ...(d.settings || {}), clientSecret: keep.clientSecret });
+  await setMeta('settings', { ...(d.settings || {}), clientSecret: keep.clientSecret, inboxToken: keep.inboxToken });
 }
 export async function wipe() {
   for (const s of ['activities', 'streams', 'meta']) await clear(s);

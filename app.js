@@ -3,13 +3,15 @@ import * as db from './db.js';
 import * as S from './strava.js';
 import { buildPrompt } from './coach.js';
 import { importFiles } from './importer.js';
+import { pullInbox, validInboxUrl } from './inbox.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v8';
+const APP_VERSION = 'v9';
+let inboxLast = null, pulling = false, lastPullAt = 0;
 let coachDraft = { reply: '', pending: null }; // réponse collée et aperçu en attente de validation
 const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 let D = null, ctx = null, tokens = null, view = 'home', busy = false, codeScreen = null;
@@ -278,6 +280,26 @@ async function movePlanSession(key, to) {
   await refresh(); setStatus('Séance déplacée ✓');
 }
 
+/** Récupère les séances déposées dans la boîte de réception. `manual` : afficher aussi les erreurs et le « rien de nouveau ». */
+async function pullFromInbox(manual) {
+  const st = ctx?.settings || {};
+  if (!st.inboxUrl || !st.inboxToken) { if (manual) setStatus("Renseignez l'adresse et le code de la boîte.", true); return; }
+  if (pulling) return; pulling = true; lastPullAt = Date.now();
+  try {
+    const have = await db.getAll('activities');
+    const r = await pullInbox({ url: st.inboxUrl, token: st.inboxToken }, have, async (acts, streams) => { await db.putMany('activities', acts); if (streams.length) await db.putMany('streams', streams); });
+    inboxLast = { at: new Date().toISOString(), imported: r.imported, error: null }; await db.setMeta('inbox_last', inboxLast);
+    if (r.imported) {
+      ctx = await db.loadContext();
+      if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e) { /* ignore */ } }
+      await refresh(); setStatus(`${r.imported} séance${r.imported > 1 ? 's' : ''} reçue${r.imported > 1 ? 's' : ''} depuis Santé ✓`);
+    } else if (manual) { await refresh(); setStatus('Rien de nouveau dans la boîte.'); }
+  } catch (e) {
+    inboxLast = { at: new Date().toISOString(), imported: 0, error: e.message }; await db.setMeta('inbox_last', inboxLast);
+    if (manual) { await refresh(); setStatus(e.message, true); }
+  } finally { pulling = false; }
+}
+
 async function doSync(withStreams) {
   if (busy) return;
   busy = true; render();
@@ -337,7 +359,15 @@ function settingsView() {
       <div><button class="primary" type="submit">Enregistrer</button></div>
     </form><div id="hrErr" class="err"></div>
     ${hrHelp(s)}</div>
-  <details class="card"><summary><b>3. Connexion directe à Strava</b> <span class="tag">abonnement Strava requis</span></summary>
+  <div class="card"><h2>3. ⚡ Synchro automatique <span class="tag">gratuit</span></h2>
+    <p class="muted">Un raccourci iPhone dépose vos séances Santé dans <b>votre</b> boîte de réception (Cloudflare, gratuit) ; l'app les récupère toute seule à l'ouverture et met le plan à jour. Mise en place : voir le README (section « Synchro automatique »). Tant que l'adresse et le code ne sont pas renseignés, rien n'est envoyé ni reçu.</p>
+    <form id="inboxForm">
+      <div style="grid-column:1/-1"><label>Adresse de la boîte <span class="muted">(https://….workers.dev)</span></label><input name="inboxUrl" inputmode="url" autocomplete="off" value="${esc(s.inboxUrl || '')}" placeholder="https://ma-boite.mon-compte.workers.dev"></div>
+      <div style="grid-column:1/-1"><label>Code secret <span class="muted">(reste sur ce téléphone)</span></label><input name="inboxToken" type="password" autocomplete="off" value="${esc(s.inboxToken || '')}"></div>
+      <div><button class="primary" type="submit">Enregistrer</button></div>
+      <div><button type="button" id="pullNow">Récupérer maintenant</button></div>
+    </form><div id="inboxMsg" class="muted" style="margin-top:8px">${inboxLast ? (inboxLast.error ? `<span class="err">Dernière tentative (${esc(new Date(inboxLast.at).toLocaleString('fr-FR'))}) : ${esc(inboxLast.error)}</span>` : `Dernière récupération : ${esc(new Date(inboxLast.at).toLocaleString('fr-FR'))} (${inboxLast.imported} nouvelle${inboxLast.imported > 1 ? 's' : ''} séance${inboxLast.imported > 1 ? 's' : ''}).`) : ''}</div></div>
+  <details class="card"><summary><b>4. Connexion directe à Strava</b> <span class="tag">abonnement Strava requis</span></summary>
     <p class="muted">Strava réserve désormais son API aux abonnés. Inutile si vous importez votre export.</p>
     <h2 style="margin-top:12px">Application Strava</h2>
     <ol class="steps muted"><li>Sur <b>strava.com/settings/api</b>, créez une application (gratuit).</li>
@@ -354,7 +384,7 @@ function settingsView() {
     <p class="muted" style="font-size:13px">Si, après l'autorisation, la page s'ouvre dans Safari au lieu de l'app, copiez le code affiché puis collez-le ici :</p>
     <form id="codeForm" style="grid-template-columns:1fr auto"><input name="code" placeholder="Code ou adresse complète" autocomplete="off"><button>Valider</button></form>
     <div id="testOut" class="muted" style="margin-top:8px"></div></div></details>
-  <div class="card"><h2>4. Données</h2>
+  <div class="card"><h2>5. Données</h2>
     <p class="muted">Tout est stocké uniquement sur cet appareil. Faites une sauvegarde de temps en temps.</p>
     <div class="row"><button id="exportBtn">Exporter une sauvegarde</button>
       <label style="margin:0"><span class="muted">Restaurer une sauvegarde</span><input id="restoreFile" type="file" accept="application/json"></label></div>
@@ -434,6 +464,21 @@ function bind() {
   if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText($('#coachTxt').value); } catch { $('#coachTxt').select(); document.execCommand('copy'); } cp.textContent = 'Copié ✓'; setTimeout(() => cp.textContent = 'Copier', 1500); };
 
   const ver = $('#appVersion'); if (ver) ver.textContent = `App ${APP_VERSION} · plan v${E.PLAN_VERSION}`;
+  const inf = $('#inboxForm');
+  if (inf) {
+    inf.onsubmit = async e => {
+      e.preventDefault();
+      const url = inf.inboxUrl.value.trim().replace(/\/+$/, ''), token = inf.inboxToken.value.trim();
+      if (url && !validInboxUrl(url)) { $('#inboxMsg').innerHTML = '<span class="err">L\'adresse doit commencer par https://</span>'; return; }
+      await db.setMeta('settings', { ...ctx.settings, inboxUrl: url, inboxToken: token }); ctx = await db.loadContext();
+      setStatus('Boîte de réception enregistrée ✓'); await refresh();
+    };
+    $('#pullNow').onclick = async () => {
+      const url = inf.inboxUrl.value.trim().replace(/\/+$/, ''), token = inf.inboxToken.value.trim();
+      if (url && token && (url !== ctx.settings.inboxUrl || token !== ctx.settings.inboxToken)) { await db.setMeta('settings', { ...ctx.settings, inboxUrl: url, inboxToken: token }); ctx = await db.loadContext(); }
+      await pullFromInbox(true);
+    };
+  }
   const hf = $('#hrForm');
   if (hf) hf.onsubmit = async e => {
     e.preventDefault();
@@ -588,7 +633,10 @@ async function boot() {
   }
   D = E.dashboard(ctx, today());
   render();
+  inboxLast = await db.getMeta('inbox_last');
   navigator.storage?.persist?.();
+  pullFromInbox(false); // récupération automatique à l'ouverture (sans effet si la boîte n'est pas configurée)
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - lastPullAt > 60_000) pullFromInbox(false); });
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 boot().catch(e => { $('#app').innerHTML = `<div class="card err">Erreur : ${esc(e.message)}</div>`; });

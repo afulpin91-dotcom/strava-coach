@@ -5,7 +5,7 @@ Une app qui s'installe sur l'écran d'accueil de l'iPhone. **Vos données resten
 
 Fichiers à publier (à plat, 13 fichiers) : `index.html`, `app.js`, `engine.js`, `db.js`, `strava.js`, `importer.js`, `coach.js`,
 `sw.js`, `manifest.webmanifest` et les 4 images `*.png`.
-`worker.js` (relais Cloudflare, facultatif) n'est pas servi par l'app : il sert seulement à l'étape 4.
+`worker.js` et `inbox-worker.js` (scripts Cloudflare, facultatifs) ne sont pas servis par l'app : ils servent aux étapes 4 et « Synchro automatique ».
 
 ## 1. Publier l'app (une seule fois, ~10 min, gratuit)
 
@@ -43,6 +43,46 @@ Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 2. Settings › Variables : `CLIENT_ID`, `CLIENT_SECRET` (type *Secret*), `ALLOWED_ORIGIN` = `https://VOTRE-NOM.github.io`.
 3. Réglages › « Adresse du relais » : l'adresse `https://….workers.dev`.
 
+## Synchro automatique depuis Santé (boîte de réception)
+
+**Principe.** Une app web ne peut pas lire Santé (HealthKit) : seul un raccourci iPhone le peut. Il dépose vos séances dans
+**votre** petite boîte de réception Cloudflare (gratuite, protégée par un code secret) ; l'app les récupère toute seule à
+l'ouverture, puis recalcule le plan. Les séances déjà connues (export Strava, saisie) ne sont jamais dupliquées.
+Rien n'est envoyé ni reçu tant que l'adresse et le code ne sont pas renseignés dans Réglages.
+
+### A. Créer la boîte (une fois, ~10 min)
+1. dash.cloudflare.com › Workers & Pages › **KV** › Create : un espace nommé `inbox`.
+2. Workers & Pages › Create › **Worker** (nom libre, ex. `ma-boite-sante`) › Deploy › Edit code : collez `inbox-worker.js` › Deploy.
+3. Worker › Settings › Bindings › Add › **KV namespace** : nom de variable `INBOX`, espace `inbox`.
+4. Settings › Variables and Secrets : `TOKEN` (type *Secret*, au moins 16 caractères aléatoires : c'est votre mot de passe)
+   et `ALLOWED_ORIGIN` = `https://VOTRE-NOM.github.io` (l'adresse de l'app, sans `/` final).
+5. Dans l'app : Réglages › **3. Synchro automatique** : collez l'adresse du Worker (`https://….workers.dev`) et le code › Enregistrer
+   › **Récupérer maintenant** : « Rien de nouveau dans la boîte » signifie que la liaison fonctionne.
+
+### B. Le raccourci iPhone (non testé par moi : les noms d'actions peuvent différer selon votre version d'iOS)
+Dans l'app **Raccourcis**, créez un raccourci avec ces actions :
+1. **Rechercher des échantillons de santé** : type *Séances d'entraînement* (Workouts), date de début **dans les 3 derniers jours**, trié par date, limite 20.
+2. **Répéter avec chaque élément** : pour chaque séance, créez un **dictionnaire** avec :
+   `type` (type de séance), `start` (date de début, format ISO 8601), `duration_s` (durée en secondes),
+   `distance_m` (distance totale en mètres), et si possible `avg_hr` (FC moyenne : un second « Rechercher des échantillons de santé »
+   de type *Fréquence cardiaque* entre le début et la fin de la séance, puis *Calculer des statistiques › Moyenne*).
+   Ajoutez ce dictionnaire à une liste.
+3. **Obtenir le contenu de l'URL** : `https://VOTRE-WORKER.workers.dev/ingest`, méthode **POST**, en-tête
+   `Authorization` = `Bearer VOTRE-CODE`, corps de la requête **JSON** : un champ `workouts` = la liste.
+4. Lancez-le à la main une fois (iOS demande l'accès à Santé), puis, dans l'app : **Récupérer maintenant**.
+
+Format attendu (les nombres en texte, la virgule décimale, `duration_min`, `distance_km` et `end` sont aussi acceptés) :
+```json
+{"workouts":[{"type":"Running","start":"2026-10-18T07:30:00Z","duration_s":3300,"distance_m":9800,"avg_hr":151}]}
+```
+Test sans iPhone : `curl -X POST https://VOTRE-WORKER.workers.dev/ingest -H "Authorization: Bearer VOTRE-CODE" -H "Content-Type: application/json" -d '{"workouts":[...]}'`
+
+### C. L'automatiser
+Raccourcis › **Automatisation** › + › choisissez un déclencheur › exécuter ce raccourci › désactivez « Demander avant d'exécuter ».
+**Attention :** les données Santé sont chiffrées quand l'iPhone est verrouillé ; un déclencheur « heure de la journée » la nuit peut
+donc ne rien lire. Préférez un déclencheur qui arrive quand vous utilisez le téléphone (par exemple l'ouverture d'une appli que
+vous ouvrez après chaque sortie), ou lancez le raccourci depuis l'écran d'accueil. À vérifier sur votre téléphone.
+
 ## Utiliser le plan
 
 - **Vos jours :** à la création de l'objectif, cochez les jours où vous pouvez courir (3 à 6) et le jour de la sortie longue.
@@ -74,6 +114,6 @@ Rien n'est appliqué sans votre validation, et une réponse mal formée est refu
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v8'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v9'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

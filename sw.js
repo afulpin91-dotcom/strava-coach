@@ -1,8 +1,8 @@
 // Service worker : l'app s'ouvre hors ligne. Les appels à Strava ne sont jamais interceptés.
 // Réseau d'abord (revalidé à chaque fois) : une mise à jour du site est visible dès le rechargement ;
 // le cache ne sert que sans connexion.
-const CACHE = 'strava-coach-v8';
-const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'app.js', 'engine.js', 'db.js', 'strava.js', 'coach.js', 'importer.js',
+const CACHE = 'strava-coach-v9';
+const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'app.js', 'engine.js', 'db.js', 'strava.js', 'coach.js', 'importer.js', 'inbox.js',
   'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting())); });
