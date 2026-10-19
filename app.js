@@ -9,7 +9,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v6';
+const APP_VERSION = 'v7';
 const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 let D = null, ctx = null, tokens = null, view = 'home', busy = false, codeScreen = null;
 
@@ -271,6 +271,22 @@ function homeView() {
   return kpis() + planSection() + chartsSection() + activitiesSection() + manualSection() + coachSection();
 }
 
+/** Plus haute FC « crédible » vue dans vos fichiers : 99e centile par activité (évite les pics du capteur), puis le maximum. */
+function observedMaxHr() {
+  let best = 0;
+  for (const st of Object.values(ctx.streams)) {
+    const hr = (st.heartrate || []).filter(x => x > 0 && x < 230).sort((a, b) => a - b);
+    if (hr.length >= 300) best = Math.max(best, hr[Math.floor((hr.length - 1) * 0.99)]);
+  }
+  return best || null;
+}
+function hrHelp(s) {
+  const obs = observedMaxHr(), cur = Number(s.fcMax) || 190;
+  return `<div class="muted" id="hrHelp" style="font-size:13px;margin-top:10px">
+    ${obs ? `Plus haute FC relevée dans vos fichiers : <b>${obs} bpm</b>${!s.fcMax || obs > cur ? ` <button type="button" class="mini" id="useObsHr" data-hr="${obs}" style="opacity:1">Utiliser comme FC max</button>` : ''}<br>` : ''}
+    <b>FC max</b> : la plus haute FC atteinte lors d'un effort à fond (fin de course ou de côte). À défaut, 220 − votre âge donne un ordre de grandeur, souvent à ±10 bpm.<br>
+    <b>FC repos</b> : votre FC au réveil, allongé, avant de vous lever (moyenne de quelques matins).</div>`;
+}
 function settingsView() {
   const s = ctx.settings, host = location.host;
   return `<div class="card"><h2>1. Importer mon export Strava <span class="tag">gratuit</span></h2>
@@ -279,7 +295,16 @@ function settingsView() {
       <li>Touchez ci-dessous et choisissez le ZIP (ou des fichiers FIT / GPX / TCX).</li></ol>
     <input id="importFile" type="file" multiple>
     <p class="muted" style="font-size:13px">Les fichiers FIT contiennent la fréquence cardiaque (zones précises). Les GPX n'en ont pas : seuls la distance, la durée et le dénivelé sont utilisés. Un nouvel import n'ajoute que les nouveautés.</p></div>
-  <details class="card"><summary><b>2. Connexion directe à Strava</b> <span class="tag">abonnement Strava requis</span></summary>
+  <div class="card"><h2>2. ❤️ Fréquence cardiaque</h2>
+    <p class="muted">Elle sert à estimer votre niveau, vos zones et votre fatigue. Des valeurs justes améliorent nettement le plan.</p>
+    <form id="hrForm">
+      <div><label>FC max (bpm)</label><input name="fcMax" type="number" inputmode="numeric" min="120" max="230" value="${esc(s.fcMax || '')}" placeholder="190"></div>
+      <div><label>FC repos (bpm)</label><input name="fcRepos" type="number" inputmode="numeric" min="30" max="100" value="${esc(s.fcRepos || '')}" placeholder="55"></div>
+      <div style="grid-column:1/-1"><label>Zones FC manuelles <span class="muted">(facultatif : limites hautes Z1 à Z4, ex. 114,133,152,171)</span></label><input name="fcZones" value="${esc(s.fcZones || '')}"></div>
+      <div><button class="primary" type="submit">Enregistrer</button></div>
+    </form><div id="hrErr" class="err"></div>
+    ${hrHelp(s)}</div>
+  <details class="card"><summary><b>3. Connexion directe à Strava</b> <span class="tag">abonnement Strava requis</span></summary>
     <p class="muted">Strava réserve désormais son API aux abonnés. Inutile si vous importez votre export.</p>
     <h2 style="margin-top:12px">Application Strava</h2>
     <ol class="steps muted"><li>Sur <b>strava.com/settings/api</b>, créez une application (gratuit).</li>
@@ -289,9 +314,6 @@ function settingsView() {
       <div><label>Client ID</label><input name="clientId" inputmode="numeric" value="${esc(s.clientId || '')}"></div>
       <div><label>Client Secret <span class="muted">(reste sur ce téléphone)</span></label><input name="clientSecret" type="password" autocomplete="off" value="${esc(s.clientSecret || '')}"></div>
       <div><label>Adresse du relais <span class="muted">(optionnel, voir README)</span></label><input name="relayUrl" inputmode="url" placeholder="https://….workers.dev" value="${esc(s.relayUrl || '')}"></div>
-      <div><label>FC max (bpm)</label><input name="fcMax" type="number" inputmode="numeric" value="${esc(s.fcMax || 190)}"></div>
-      <div><label>FC repos (bpm)</label><input name="fcRepos" type="number" inputmode="numeric" value="${esc(s.fcRepos || 55)}"></div>
-      <div><label>Zones FC manuelles <span class="muted">(limites hautes Z1 à Z4, ex. 114,133,152,171)</span></label><input name="fcZones" value="${esc(s.fcZones || '')}"></div>
       <div><button class="primary" type="submit">Enregistrer</button></div>
     </form></div>
   <div style="margin-top:14px"><h2>Connexion ${tokens ? '<span class="ok">✓ connecté</span>' : ''}</h2>
@@ -299,7 +321,7 @@ function settingsView() {
     <p class="muted" style="font-size:13px">Si, après l'autorisation, la page s'ouvre dans Safari au lieu de l'app, copiez le code affiché puis collez-le ici :</p>
     <form id="codeForm" style="grid-template-columns:1fr auto"><input name="code" placeholder="Code ou adresse complète" autocomplete="off"><button>Valider</button></form>
     <div id="testOut" class="muted" style="margin-top:8px"></div></div></details>
-  <div class="card"><h2>3. Données</h2>
+  <div class="card"><h2>4. Données</h2>
     <p class="muted">Tout est stocké uniquement sur cet appareil. Faites une sauvegarde de temps en temps.</p>
     <div class="row"><button id="exportBtn">Exporter une sauvegarde</button>
       <label style="margin:0"><span class="muted">Restaurer une sauvegarde</span><input id="restoreFile" type="file" accept="application/json"></label></div>
@@ -351,12 +373,29 @@ function bind() {
   if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText($('#coachTxt').value); } catch { $('#coachTxt').select(); document.execCommand('copy'); } cp.textContent = 'Copié ✓'; setTimeout(() => cp.textContent = 'Copier', 1500); };
 
   const ver = $('#appVersion'); if (ver) ver.textContent = `App ${APP_VERSION} · plan v${E.PLAN_VERSION}`;
+  const hf = $('#hrForm');
+  if (hf) hf.onsubmit = async e => {
+    e.preventDefault();
+    const v = Object.fromEntries(new FormData(hf)); for (const k of Object.keys(v)) v[k] = String(v[k]).trim();
+    const max = v.fcMax ? Number(v.fcMax) : null, rest = v.fcRepos ? Number(v.fcRepos) : null;
+    const zones = v.fcZones ? v.fcZones.split(',').map(x => parseInt(x, 10)) : [];
+    const err = (max && (max < 120 || max > 230)) ? 'FC max : entre 120 et 230 bpm.'
+      : (rest && (rest < 30 || rest > 100)) ? 'FC repos : entre 30 et 100 bpm.'
+      : (max && rest && max - rest < 40) ? 'FC max et FC repos sont trop proches.'
+      : (v.fcZones && (zones.length !== 4 || zones.some((z, i) => !Number.isFinite(z) || (i && z <= zones[i - 1])))) ? 'Zones : 4 valeurs croissantes, ex. 114,133,152,171.' : '';
+    if (err) { $('#hrErr').textContent = err; return; }
+    await db.setMeta('settings', { ...ctx.settings, fcMax: v.fcMax, fcRepos: v.fcRepos, fcZones: v.fcZones });
+    ctx = await db.loadContext();
+    if (ctx.meta.goal && ctx.meta.plan) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e2) { setStatus(e2.message, true); } }
+    await refresh(); setStatus('Fréquence cardiaque enregistrée ✓ — niveau et zones recalculés.');
+  };
+  const uo = $('#useObsHr'); if (uo) uo.onclick = () => { hf.fcMax.value = uo.dataset.hr; hf.fcMax.focus(); };
   const sf = $('#settingsForm');
   if (sf) sf.onsubmit = async e => {
     e.preventDefault();
     const v = Object.fromEntries(new FormData(sf));
     for (const k of Object.keys(v)) v[k] = String(v[k]).trim();
-    await db.setMeta('settings', v);
+    await db.setMeta('settings', { ...ctx.settings, ...v });
     if (ctx.meta.goal && ctx.meta.plan) { ctx = await db.loadContext(); await db.setMeta('plan', E.updatePlan(ctx, today())); }
     setStatus('Réglages enregistrés ✓'); await refresh();
   };
@@ -483,7 +522,7 @@ async function boot() {
       catch (e) { setStatus(e.message, true); }
     } else codeScreen = q.get('code');
   }
-  if (ctx.meta.goal && ctx.meta.plan && (ctx.meta.plan.generated !== today() || ctx.meta.plan.v !== E.PLAN_VERSION)) { // nouveau jour : le plan se recale sur le réalisé
+  if (ctx.meta.goal && (!ctx.meta.plan || ctx.meta.plan.generated !== today() || ctx.meta.plan.v !== E.PLAN_VERSION)) { // nouveau jour : le plan se recale sur le réalisé
     try { await db.setMeta('plan', E.updatePlan(ctx, today())); ctx = await db.loadContext(); } catch (e) { setStatus(e.message, true); }
   }
   D = E.dashboard(ctx, today());

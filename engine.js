@@ -432,7 +432,7 @@ export function updatePlan(ctx, today, forceNew = false) {
     notes.push(`La course est très proche (${weeksLeft} semaine(s) avant la semaine de course) : le plan se limite à l'affûtage. Sorties faciles, repos, et pas de séance dure.`);
   }
   if (conf === 'moyenne') {
-    notes.push('Niveau estimé à partir de vos sorties (allure et FC) : correct si votre FC max et votre FC repos sont justes. Ajoutez une course ou un test récent pour affiner.');
+    notes.push('Niveau estimé à partir de vos sorties (allure et FC) : correct si votre FC max et votre FC repos (Réglages › Fréquence cardiaque) sont justes. Ajoutez une course ou un test récent pour affiner.');
   } else if (conf !== 'bonne') {
     notes.push('Niveau estimé avec prudence (pas de course récente) : allures et temps prédit peu fiables. Ajoutez une course ou un test récent pour les affiner.');
   } else if (gap > 0.15 * weeksLeft + 0.5) {
