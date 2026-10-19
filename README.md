@@ -3,47 +3,51 @@
 Une app qui s'installe sur l'écran d'accueil de l'iPhone. **Vos données restent sur le téléphone**
 (stockage local du navigateur). L'hébergement ne contient que le code, jamais vos activités ni vos clés.
 
-Fichiers à publier (à plat, 12 fichiers) : `index.html`, `app.js`, `engine.js`, `db.js`, `strava.js`, `coach.js`,
+Fichiers à publier (à plat, 13 fichiers) : `index.html`, `app.js`, `engine.js`, `db.js`, `strava.js`, `importer.js`, `coach.js`,
 `sw.js`, `manifest.webmanifest` et les 4 images `*.png`.
 Les dossiers `relay/` et `tests/` ne se publient pas.
 
 ## 1. Publier l'app (une seule fois, ~10 min, gratuit)
 
 1. Créez un compte sur github.com, puis un dépôt **public** nommé `strava-coach`.
-2. Dans le dépôt : **Add file › Upload files**, sélectionnez les 12 fichiers, puis **Commit changes**.
+2. Dans le dépôt : **Add file › Upload files**, sélectionnez les 13 fichiers, puis **Commit changes**.
    (Sur iPhone : dézippez d'abord l'archive dans l'app Fichiers.)
 3. **Settings › Pages › Build and deployment** : Source = *Deploy from a branch*, branche `main`, dossier `/ (root)`.
    Au bout d'une ou deux minutes, l'adresse est `https://VOTRE-NOM.github.io/strava-coach/`.
 
-## 2. Créer l'application Strava
+## 2. Installer l'app sur l'iPhone
 
-Sur https://www.strava.com/settings/api : créez une application.
-- **Authorization Callback Domain** : `VOTRE-NOM.github.io` (sans `https://`, sans chemin).
-- Notez le Client ID et le Client Secret.
+Ouvrez l'adresse de l'étape 1 dans **Safari** › Partager › **Sur l'écran d'accueil**, puis lancez l'app depuis l'icône.
 
-## 3. Installer et connecter (sur l'iPhone)
+## 3. Charger vos données (gratuit, sans l'API Strava)
 
-1. Ouvrez l'adresse de l'étape 1 dans **Safari** › Partager › **Sur l'écran d'accueil**.
-2. Lancez l'app depuis l'icône › **Réglages** : Client ID, Client Secret, FC max, FC repos › Enregistrer.
-3. **Tester la connexion directe** : si ça passe, vous n'avez pas besoin du relais (étape 4).
-4. **Se connecter à Strava**, autorisez en laissant « Voir toutes vos activités » coché.
-5. Après l'autorisation, iOS peut rouvrir la page dans Safari plutôt que dans l'app (le stockage est séparé).
-   Dans ce cas la page affiche un **code** : copiez-le, revenez dans l'app installée › Réglages › **Coller le code**.
-6. Retour sur le tableau de bord › **Synchroniser** (cochez « détails FC » pour des zones précises), puis créez votre objectif.
+Strava réserve son API aux abonnés ; l'export de vos données reste la voie gratuite.
+1. Sur strava.com : Paramètres › Mon compte › « Télécharger ou supprimer votre compte » › demandez l'archive.
+2. Téléchargez le ZIP reçu par e-mail.
+3. Dans l'app : **Réglages › Importer mon export Strava**, choisissez le ZIP (ou des fichiers FIT / GPX / TCX).
+   Un nouvel export plus tard n'ajoute que les nouveautés, sans doublons.
 
-## 4. Relais (seulement si le test de l'étape 3 échoue)
+- Les fichiers **FIT** contiennent la fréquence cardiaque : zones précises. Les **GPX** n'en ont pas
+  (distance, durée et dénivelé seulement).
+- Strava n'indique pas dans les fichiers quelles activités sont des courses : touchez 🏁 sur une activité
+  pour la marquer. Cela recalcule votre niveau et vos allures.
+- Ensuite : créez votre objectif sur le tableau de bord.
 
-Certains appels Strava peuvent être refusés par le navigateur. Le relais est un petit script gratuit, à vous :
+## 4. (Option, abonnés Strava) Connexion directe à l'API
+
+Réglages › « Connexion directe à Strava » : Client ID / Secret d'une application créée sur strava.com/settings/api
+(« Authorization Callback Domain » = `VOTRE-NOM.github.io`), puis **Se connecter** ; si la page s'ouvre dans Safari,
+copiez le code affiché et collez-le dans Réglages › Coller le code. Un bouton **Synchroniser** apparaît alors.
+Si le test de connexion directe échoue (CORS), utilisez le relais Cloudflare :
 1. dash.cloudflare.com › Workers & Pages › **Create** › Worker › collez `relay/worker.js` › Deploy.
 2. Settings › Variables : `CLIENT_ID`, `CLIENT_SECRET` (type *Secret*), `ALLOWED_ORIGIN` = `https://VOTRE-NOM.github.io`.
-3. Dans l'app › Réglages › « Adresse du relais » : l'adresse `https://….workers.dev`. Le Client Secret n'a alors plus besoin d'être saisi sur le téléphone.
+3. Réglages › « Adresse du relais » : l'adresse `https://….workers.dev`.
 
 ## À savoir
 
-- La limite gratuite de Strava est de 100 requêtes par 15 min : un premier import long peut s'interrompre
-  (progression sauvegardée, relancez plus tard).
+- Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v1'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v3'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

@@ -131,7 +131,7 @@ export function pace(speed) {
 
 export function recentActivities(ctx, n = 10) {
   return [...ctx.acts].reverse().slice(0, n).map(a => ({
-    date: dayOf(a), sport: a.sport, nom: a.name,
+    id: a.id, date: dayOf(a), sport: a.sport, nom: a.name,
     km: r1((a.distance_m || 0) / 1000), duree_min: rnd((a.moving_s || 0) / 60),
     allure: RUN.has(a.sport) ? pace(a.avg_speed) : null,
     fc_moy: a.avg_hr ?? null, d_plus: a.elevation_m ?? null, effort_percu: a.perceived_exertion ?? null,
@@ -313,7 +313,9 @@ export function updatePlan(ctx, today, forceNew = false) {
   let weeks;
 
   if (old) {
-    const frozen = old.weeks.filter(w => w.monday <= cur), first = addDays(cur, 7);
+    // Semaine en cours : figée si elle a déjà commencé (ou si c'est la 1re du plan), sinon recalculée.
+    const started = loadRows(ctx, cur).length > 0, keep = started || !old.weeks.some(w => w.monday < cur);
+    const frozen = old.weeks.filter(w => (keep ? w.monday <= cur : w.monday < cur)), first = keep ? addDays(cur, 7) : cur;
     const prev = old.weeks.find(w => w.monday === addDays(cur, -7));
     const chain = frozen.length ? frozen[frozen.length - 1].chain_km : old.weeks[0].chain_km;
     let base = chain;
