@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Strava Coach</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Coach">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="theme-color" content="#fc4c02">
+<style>
+:root{
+  --bg:#f6f7f9;--card:#fff;--text:#1b1f24;--muted:#677084;--line:#e3e6eb;--accent:#fc4c02;
+  --good:#1a8f4d;--warn:#c27a00;--bad:#c62828;--blue:#2b6cb0;
+  --z1:#bcd7f0;--z2:#7fb3e0;--z3:#f2c14e;--z4:#ee8a3a;--z5:#d1483b;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#111418;--card:#1a1e24;--text:#e8eaee;--muted:#9099a8;--line:#2b313a;--accent:#ff6a2b;
+  --good:#4cc77f;--warn:#e5ad3a;--bad:#ef6a62;--blue:#6aa7e6;
+  --z1:#3b5a78;--z2:#4a82b5;--z3:#c9a03b;--z4:#d8793a;--z5:#d1483b;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:16px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+h1{font-size:20px;margin:0}
+h2{font-size:16px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.kpi .v{font-size:26px;font-weight:650;font-variant-numeric:tabular-nums}
+.kpi .l{color:var(--muted);font-size:13px}
+.kpi .s{font-size:13px;font-weight:600}
+.good{color:var(--good)}.warn{color:var(--warn)}.bad{color:var(--bad)}.muted{color:var(--muted)}
+button{font:inherit;border:1px solid var(--line);background:var(--card);color:var(--text);border-radius:8px;padding:8px 14px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+button:disabled{opacity:.5;cursor:default}
+input,select{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);width:100%}
+label{display:block;font-size:13px;color:var(--muted)}
+form{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));align-items:end}
+.banner{border-left:4px solid var(--warn)}
+.notes li{margin:4px 0}
+details{border-top:1px solid var(--line);padding:8px 0}
+summary{cursor:pointer;display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap}
+.sess{display:grid;grid-template-columns:76px 1fr 22px;gap:8px;padding:5px 0;font-size:14px}
+.sess .d{color:var(--muted)}
+.tag{font-size:12px;padding:1px 8px;border-radius:99px;border:1px solid var(--line);color:var(--muted)}
+.cur{border-color:var(--accent);color:var(--accent)}
+svg{width:100%;height:auto;display:block}
+svg text{fill:var(--muted);font-size:10px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:6px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}
+th{color:var(--muted);font-weight:500}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+textarea{width:100%;min-height:220px;font:12px/1.4 ui-monospace,monospace;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px}
+.err{color:var(--bad)}
+.scroll{overflow-x:auto}
+
+body{padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+nav{display:flex;gap:6px;margin-bottom:14px}
+nav button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+input,select,textarea{font-size:16px} /* évite le zoom automatique d'iOS */
+code{background:var(--bg);padding:1px 5px;border-radius:4px;font-size:13px;word-break:break-all}
+.row{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));margin-bottom:12px}
+.ok{color:var(--good)}
+.steps li{margin:6px 0}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>🏃 Strava Coach</h1>
+  <div id="headActions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"></div>
+</header>
+<nav><button id="tabHome" class="on">Tableau de bord</button><button id="tabSettings">Réglages</button></nav>
+<div id="status" class="muted" style="margin:-4px 0 12px"></div>
+<div id="app"></div>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
