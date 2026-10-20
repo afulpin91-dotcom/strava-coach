@@ -96,6 +96,13 @@ vous ouvrez après chaque sortie), ou lancez le raccourci depuis l'écran d'accu
 - **Niveau :** sans course, l'app l'estime depuis l'allure et la FC de vos sorties (il faut donc une FC max et une FC repos
   justes dans Réglages). « Affiner mon niveau » permet d'ajouter une course ou un test en quelques secondes.
 
+## Plan de course (allure par km)
+
+Sur le plan, ouvrez **🏁 Plan de course** : l'allure à viser à chaque kilomètre pour tenir votre temps visé (le total fait exactement ce temps),
+avec les temps de passage tous les 5 km, la possibilité de **copier** ou **partager** le tableau. Trois stratégies : *progressif* (départ ~2 % plus lent,
+arrivée ~2 % plus rapide, recommandé), *régulier*, *très prudent*. Option : chargez le **GPX du parcours** (avec altitude) pour ajuster
+l'allure aux côtes (à effort égal : ordre de grandeur, +5 % de pente ≈ +18 % de temps) ; la pente de chaque km est affichée.
+
 ## Le coach (IA) : relire sa réponse dans l'app
 
 1. **① Générer le message** : il contient vos chiffres, votre plan, votre état du jour et les remarques déjà reçues.
@@ -114,6 +121,6 @@ Rien n'est appliqué sans votre validation, et une réponse mal formée est refu
 - Limite de l'API (abonnés) : 100 requêtes par 15 min ; un premier import long peut s'interrompre (progression sauvegardée).
 - Faites de temps en temps **Réglages › Exporter une sauvegarde** (fichier JSON, sans le secret).
   iOS peut vider les données d'un site peu utilisé ; une app installée est normalement épargnée.
-- Mise à jour du code : modifiez `CACHE = 'strava-coach-v9'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
+- Mise à jour du code : modifiez `CACHE = 'strava-coach-v10'` dans `sw.js` (v2, v3…) pour forcer le rafraîchissement.
 - Le moteur est vérifié identique à la version Python : `node tests/compare.mjs` (après `python3 tests/gen_reference.py`).
 - Ce n'est pas un avis médical : en cas de douleur ou de fatigue anormale, levez le pied.

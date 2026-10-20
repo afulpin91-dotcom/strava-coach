@@ -4,13 +4,14 @@ import * as S from './strava.js';
 import { buildPrompt } from './coach.js';
 import { importFiles } from './importer.js';
 import { pullInbox, validInboxUrl } from './inbox.js';
+import { STRATEGIES, racePlan, checkpoints, courseProfileFromGpx, racePlanText, fmtPaceS, fmtClock } from './racepace.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v9';
+const APP_VERSION = 'v10';
 let inboxLast = null, pulling = false, lastPullAt = 0;
 let coachDraft = { reply: '', pending: null }; // réponse collée et aperçu en attente de validation
 const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
@@ -105,6 +106,31 @@ function goalForm(existing) {
     <div><button class="primary" type="submit">${existing ? 'Mettre à jour l\'objectif' : 'Créer mon plan'}</button></div>
   </form><div id="goalErr" class="err"></div>`;
 }
+/** Petit graphique : une barre par km, plus haute = plus rapide. */
+function paceBars(rows) {
+  const full = rows.filter(r => r.d > 0.999), lo = Math.min(...full.map(r => r.pace)), hi = Math.max(...full.map(r => r.pace)), W = 320, H = 70, bw = W / full.length;
+  const bars = full.map((r, i) => { const h = hi === lo ? 40 : 14 + (hi - r.pace) / (hi - lo) * 44; return `<rect x="${i * bw + 1}" y="${H - h}" width="${Math.max(bw - 2, 1)}" height="${h}" rx="2" fill="var(--accent)" opacity="${r.grade != null && r.grade > 0.02 ? 0.55 : 1}"><title>${esc(r.label)} : ${fmtPaceS(r.pace)}/km</title></rect>`; }).join('');
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Allure à viser par kilomètre" style="max-height:80px">${bars}</svg>`;
+}
+function raceSection(g) {
+  const course = ctx.meta.course || {}, strat = STRATEGIES[course.strategy] ? course.strategy : 'progressive', prof = course.profile || null;
+  const plan = racePlan(g, strat, prof), cps = checkpoints(plan, g.distance_km), cpSet = new Set(cps.map(c => Math.round(c[0] * 1000)));
+  const isCp = r => cpSet.has(Math.round(r.to * 1000)) && (r.to % 5 === 0 || r.to === g.distance_km);
+  return `<details class="card" style="margin:12px 0"><summary><b>🏁 Plan de course</b> <span class="muted">— allure à viser par km</span></summary>
+    <p class="muted" style="margin:10px 0 6px">Pour tenir ${esc(fmtClock(g.target_s))} sur ${esc(g.distance_km)} km : moyenne <b>${fmtPaceS(plan.avg_pace)}/km</b>, départ <b>${fmtPaceS(plan.first)}</b>, fin <b>${fmtPaceS(plan.last)}</b>.</p>
+    <label>Stratégie</label>
+    <select id="raceStrategy">${Object.entries(STRATEGIES).map(([k, v]) => `<option value="${k}" ${k === strat ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
+    <p class="muted" style="font-size:13px">Les premiers kilomètres trop rapides coûtent cher en fin de course : le départ prudent est la règle la plus sûre.</p>
+    <label style="margin-top:8px">Profil du parcours <span class="muted">(GPX de la course, facultatif : ajuste l'allure aux côtes)</span></label>
+    ${prof ? `<p style="margin:4px 0">✓ <b>${esc(prof.name)}</b> — ${prof.length_km} km, D+ ${prof.gain_m} m, D− ${prof.loss_m} m <button class="mini" id="courseClear" style="opacity:1">Retirer</button></p>` : '<input id="courseGpx" type="file" accept=".gpx,application/gpx+xml,text/xml">'}
+    ${plan.warning ? `<p class="warn" style="font-size:13px">${esc(plan.warning)}</p>` : ''}
+    <div style="margin:10px 0">${paceBars(plan.rows)}</div>
+    <div class="scroll"><table class="racetab"><tr><th>Km</th><th class="n">Allure</th><th class="n">Cumulé</th>${prof ? '<th class="n">Pente</th>' : ''}</tr>
+      ${plan.rows.map(r => `<tr style="${isCp(r) ? 'font-weight:650;background:var(--bg)' : ''}"><td>${esc(r.label.replace('Km ', ''))}</td><td class="n">${fmtPaceS(r.pace)}</td><td class="n">${fmtClock(r.cum)}</td>${prof ? `<td class="n muted">${(r.grade * 100).toFixed(1)} %</td>` : ''}</tr>`).join('')}</table></div>
+    <p class="muted" style="font-size:13px;margin:8px 0">Passages : ${cps.map(([k, t]) => `${Math.abs(k - 21.0975) < 1e-6 ? 'semi' : k} km ${fmtClock(t)}`).join(' · ')}</p>
+    <div class="row"><button id="raceCopy" class="primary">Copier le plan</button>${navigator.share ? '<button id="raceShare">Partager</button>' : ''}</div>
+  </details>`;
+}
 function coachBanner(p) {
   if (!p.coach) return '';
   return `<div class="card banner" style="margin:10px 0"><b>🧠 Séances proposées par le coach</b> <span class="muted">(du ${fmtDate(p.coach.from)} au ${fmtDate(p.coach.to)}, appliquées le ${fmtDate(p.coach.applied)})</span>
@@ -159,6 +185,7 @@ function planSection() {
     ${shown.slice(0, 3).map((w, i) => wk(w, i < 2)).join('')}
     <details><summary class="muted">Voir toutes les semaines (${shown.length - 3 > 0 ? shown.length - 3 : 0} de plus)</summary>
       ${shown.slice(3).map(w => wk(w, false)).join('')}</details>
+    ${raceSection(g)}
     <details><summary class="muted">Modifier l'objectif / signaler une course</summary><div style="padding-top:10px">
       ${goalForm({...g, days: g.days})}
       <p class="muted">Course non étiquetée « Course » sur Strava ? Entrez l'ID de l'activité (dans son URL) :</p>
@@ -464,6 +491,18 @@ function bind() {
   if (cp) cp.onclick = async () => { try { await navigator.clipboard.writeText($('#coachTxt').value); } catch { $('#coachTxt').select(); document.execCommand('copy'); } cp.textContent = 'Copié ✓'; setTimeout(() => cp.textContent = 'Copier', 1500); };
 
   const ver = $('#appVersion'); if (ver) ver.textContent = `App ${APP_VERSION} · plan v${E.PLAN_VERSION}`;
+  const rs = $('#raceStrategy');
+  if (rs) rs.onchange = async () => { await db.setMeta('course', { ...(ctx.meta.course || {}), strategy: rs.value }); ctx = await db.loadContext(); await refresh(); };
+  const cg = $('#courseGpx');
+  if (cg) cg.onchange = async () => {
+    try { const profile = courseProfileFromGpx(await cg.files[0].text()); await db.setMeta('course', { ...(ctx.meta.course || {}), profile }); ctx = await db.loadContext(); await refresh(); setStatus('Profil du parcours chargé ✓'); }
+    catch (e) { setStatus(e.message, true); }
+  };
+  const cc2 = $('#courseClear'); if (cc2) cc2.onclick = async () => { const c = { ...(ctx.meta.course || {}) }; delete c.profile; await db.setMeta('course', c); ctx = await db.loadContext(); await refresh(); };
+  const rtext = () => { const g = ctx.meta.goal, st = ctx.meta.course?.strategy || 'progressive'; return racePlanText(g, racePlan(g, st, ctx.meta.course?.profile || null), STRATEGIES[st].split(' — ')[0]); };
+  const rc = $('#raceCopy');
+  if (rc) rc.onclick = async () => { try { await navigator.clipboard.writeText(rtext()); } catch { const t = document.createElement('textarea'); t.value = rtext(); document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); } rc.textContent = 'Copié ✓'; setTimeout(() => rc.textContent = 'Copier le plan', 1500); };
+  const rsh = $('#raceShare'); if (rsh) rsh.onclick = () => navigator.share({ title: `Plan de course — ${ctx.meta.goal.name}`, text: rtext() }).catch(() => {});
   const inf = $('#inboxForm');
   if (inf) {
     inf.onsubmit = async e => {
