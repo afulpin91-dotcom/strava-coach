@@ -39,11 +39,12 @@ export function workoutToActivity(w) {
 }
 
 /** Même séance déjà connue (autre source : export Strava, saisie…) ? Début à 5 min près et distance à ±5 % (300 m mini). */
-export function isDuplicate(acts, a) {
+export function findDuplicate(acts, a) {
   const t = Date.parse(a.start_date);
-  return acts.some(x => x.id === a.id || (Math.abs(Date.parse(x.start_date) - t) <= 300_000
+  return acts.find(x => x.id === a.id || (Math.abs(Date.parse(x.start_date) - t) <= 300_000
     && Math.abs((x.distance_m || 0) - a.distance_m) <= Math.max(300, 0.05 * a.distance_m)));
 }
+export const isDuplicate = (acts, a) => !!findDuplicate(acts, a);
 
 export const validInboxUrl = u => /^https:\/\/[^\s/]+/.test(u) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?/.test(u);
 

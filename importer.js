@@ -1,6 +1,8 @@
 // Import d'un export Strava (ZIP) ou de fichiers d'activité isolés : FIT, GPX, TCX, éventuellement en .gz.
 // Tout est lu localement, rien n'est envoyé nulle part.
 
+import { stableId } from './inbox.js';
+
 const FIT_EPOCH = 631065600; // 1989-12-31T00:00:00Z en secondes Unix
 
 /* ---------- utilitaires ---------- */
@@ -187,10 +189,10 @@ export async function parseActivityFile(name, bytes) {
   else if (n.endsWith('.tcx')) p = parseTcx(new TextDecoder().decode(bytes));
   else return null;
 
-  const id = idFromName(name);
-  if (id == null) throw new Error('numéro d\'activité introuvable dans le nom du fichier');
   const sport = sportName(p.sport, p.sub);
   const start = toIso(p.start);
+  // Archive Strava : le nom du fichier est le numéro d'activité. Fichier téléchargé à l'unité (nom libre) : identifiant stable tiré de l'heure de début.
+  const id = idFromName(name) ?? stableId(`${start}|file`);
   const activity = {
     id, name: p.name || `${{ Run: 'Course à pied', TrailRun: 'Trail', Ride: 'Vélo', Walk: 'Marche', Hike: 'Randonnée', Swim: 'Natation' }[sport] || 'Séance'} du ${start.slice(0, 10)}`,
     sport, start_date: start, distance_m: Math.round(p.distance_m), moving_s: Math.round(p.moving_s), elevation_m: p.ascent == null ? null : Math.round(p.ascent),

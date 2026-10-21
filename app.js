@@ -3,7 +3,7 @@ import * as db from './db.js';
 import * as S from './strava.js';
 import { buildPrompt } from './coach.js';
 import { importFiles } from './importer.js';
-import { pullInbox, validInboxUrl } from './inbox.js';
+import { pullInbox, validInboxUrl, findDuplicate } from './inbox.js';
 import { STRATEGIES, racePlan, checkpoints, courseProfileFromGpx, racePlanText, fmtPaceS, fmtClock } from './racepace.js';
 
 const $ = (s, r = document) => r.querySelector(s);
@@ -11,7 +11,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const fmtDate = iso => new Date(iso + 'T12:00:00').toLocaleDateString('fr-FR', {weekday:'short', day:'2-digit', month:'2-digit'});
 const hms = s => `${Math.floor(s / 3600)}:${String(Math.floor(s % 3600 / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
 const PHASE = {base:'Base', construction:'Construction', 'spécifique':'Spécifique', 'affûtage':'Affûtage'};
-const APP_VERSION = 'v10';
+const APP_VERSION = 'v11';
 let inboxLast = null, pulling = false, lastPullAt = 0;
 let coachDraft = { reply: '', pending: null }; // réponse collée et aperçu en attente de validation
 const WD_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
@@ -578,18 +578,32 @@ function bind() {
   if (imp) imp.onchange = async () => {
     const files = [...imp.files]; if (!files.length) return;
     try {
-      const have = new Map((await db.getAll('activities')).map(a => [a.id, a]));
+      const have = new Map((await db.getAll('activities')).map(a => [a.id, a])), hasStream = new Set((await db.getAll('streams')).map(x => x.id));
+      let enriched = 0; const before = have.size;
       const st = await importFiles(files, async (acts, streams) => {
-        const fresh = acts.filter(a => !have.has(a.id) || have.get(a.id).source === 'export'); // ne pas écraser les données de l'API
-        await db.putMany('activities', fresh); await db.putMany('streams', streams);
-        fresh.forEach(a => have.set(a.id, a));
+        const put = [], putStreams = [], known = [...have.values()];
+        for (const a of acts) {
+          const same = have.get(a.id);
+          if (same) { if (same.source === 'export') put.push(a); continue; }           // ne pas écraser les données de l'API ou saisies à la main
+          const dup = findDuplicate(known, a);                                           // même séance déjà connue sous un autre numéro
+          if (dup) {
+            const fl = streams.find(x => x.id === a.id);
+            if (fl && !hasStream.has(dup.id)) { putStreams.push({ ...fl, id: dup.id }); hasStream.add(dup.id); enriched++; if (dup.avg_hr == null && a.avg_hr != null) put.push({ ...dup, avg_hr: a.avg_hr }); }
+            continue;
+          }
+          put.push(a); known.push(a);
+        }
+        const ids = new Set(put.map(x => x.id));
+        await db.putMany('activities', put); await db.putMany('streams', [...putStreams, ...streams.filter(x => ids.has(x.id))]);
+        put.forEach(a => have.set(a.id, a));
       }, setStatus);
       ctx = await db.loadContext();
       if (ctx.meta.goal) { try { await db.setMeta('plan', E.updatePlan(ctx, today())); } catch (e) { /* date de course passée, etc. */ } }
-      let msg = `${st.imported} activité(s) importée(s), dont ${st.withHr} avec fréquence cardiaque détaillée.`;
+      const added = [...have.values()].length - before;
+      let msg = `${added} nouvelle(s) activité(s) importée(s)` + (st.imported > added ? `, ${st.imported - added} déjà connue(s)` : '') + (enriched ? `, FC ajoutée à ${enriched} séance(s) existante(s)` : '') + '.';
       if (st.skipped) msg += ` ${st.skipped} fichier(s) ignoré(s)` + (st.errors.length ? ` (${st.errors[0]})` : '') + '.';
       if (!st.found) msg = "Aucun fichier d'activité (FIT, GPX, TCX) trouvé dans cette sélection.";
-      setStatus(msg, !st.found); if (st.imported) view = 'home';
+      setStatus(msg, !st.found); if (added || enriched) view = 'home';
     } catch (e) { setStatus(e.message, true); }
     await refresh();
   };
